@@ -73,9 +73,10 @@ has and nothing else, and learns the rest from you.
   session's state (Connected, Idle, Muted, Paused, Disconnected, Offline). **Mute** turns the mic off (`⌥⌘M`, which
   starts a conversation instead while the activation key can't be watched); she can still talk. **Pause** holds
   everything: mic off, speech cut, replies and agent reports kept until **Resume**. **Stop speaking** cuts the current
-  reply (`Esc` too; during a tap-to-talk conversation Esc ends it). **Disconnect** closes the session now, so billing
-  stops, and nothing reopens it, not speech, not an agent report, until **Connect**, a tap or a message you type;
-  reports that came in meanwhile are said then. Typing a message also ends a pause.
+  reply (`Esc` too, taken only while she speaks or the phone has focus; in tap-to-talk it ends the conversation).
+  **Disconnect** closes the session now, so billing stops, and nothing reopens it, not speech, not an agent report,
+  until **Connect**, a tap or a message you type; reports that came in meanwhile are said then. Typing a message also
+  ends a pause.
 - Everything she is lives in `~/Library/Application Support/Voice Companion/config.json`; 0.1.0's settings and
   learned skills are carried over the first time.
 

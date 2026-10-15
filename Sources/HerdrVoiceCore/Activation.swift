@@ -368,6 +368,25 @@ public struct TurnTaking: Sendable {
     }
 }
 
+/// Who gets Esc. A system-wide grab takes Esc from every other app, so it is held only while she is audibly
+/// speaking, as the plugin does; while the phone is the key window it gets Esc as any window does, with no grab.
+/// Never for a whole conversation: listening, the cooldown and the follow-up leave Esc to the app you're in.
+public enum EscapeKey {
+    public enum Owner: Equatable, Sendable {
+        /// Every app keeps its own Esc.
+        case nobody
+        /// The phone's window has focus and handles it.
+        case phone
+        /// Grabbed system-wide while she speaks.
+        case global
+    }
+
+    public static func owner(speaking: Bool, phoneIsKey: Bool) -> Owner {
+        if phoneIsKey { return .phone }
+        return speaking ? .global : .nobody
+    }
+}
+
 /// The words that end a conversation, as a whole turn ("that's all", "thanks, that's all for now").
 public enum DismissPhrase {
     static let phrases = ["that's all", "that is all", "that'll be all", "that will be all", "we're done", "we are done",

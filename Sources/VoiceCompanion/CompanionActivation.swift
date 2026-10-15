@@ -145,11 +145,12 @@ extension CompanionController {
         }
     }
 
-    /// Esc is grabbed only while it means something here: she's speaking, or a conversation is on. Every other app
-    /// keeps its Esc the rest of the time.
+    /// Esc is grabbed system-wide only while she is audibly speaking; the phone, when it has focus, gets Esc like
+    /// any window (`escapeInPhone`). Every other app keeps its Esc the rest of the time (`EscapeKey`).
     func updateEscape() {
-        let speaking = session?.audio.isSpeaking ?? false
-        Hotkey.setStopKey(active: speaking || !turns.phase.isIdle) { [weak self] in self?.escape() }
+        let owner = EscapeKey.owner(speaking: session?.audio.isSpeaking ?? false,
+                                    phoneIsKey: phoneWindow?.panel.isKeyWindow ?? false)
+        Hotkey.setStopKey(active: owner == .global) { [weak self] in self?.escape() }
     }
 
     /// Opens Input Monitoring's prompt (or its page in System Settings, once macOS has asked).

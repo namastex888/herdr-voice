@@ -163,6 +163,7 @@ import VoiceEngine
         phone.theme = PhoneTheme(seed: accent)
         let window = PhoneWindow(model: phone, content: PhoneRoot(controller: self, model: phone, live: live, device: device))
         phoneWindow = window
+        window.onFocusChange = { [weak self] in self?.updateEscape() }
         device.start()
         installStatusItem()
         window.showOrb()

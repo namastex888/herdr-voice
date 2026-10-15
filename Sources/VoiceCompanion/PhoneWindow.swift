@@ -35,6 +35,8 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
 
     let panel: PhonePanel
     let model: PhoneModel
+    /// The phone became or stopped being the key window.
+    var onFocusChange: (() -> Void)?
     private var hint: NSPanel?
 
     init(model: PhoneModel, content: some View) {
@@ -51,6 +53,12 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
         panel.isMovable = false
         panel.contentView = FirstClickHostingView(rootView: content)
         place()
+        // Esc follows focus (see EscapeKey): the controller is told when the phone gains or loses it.
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onFocusChange?() }
+            }
+        }
         // Displays come and go: keep the orb in the corner of a screen that exists.
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { [weak self] _ in

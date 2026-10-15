@@ -213,3 +213,10 @@ private func run(_ machine: inout TurnTaking, _ steps: [(TurnTaking.Event, TimeI
     #expect(!DismissPhrase.matches("open all my windows"))
     #expect(!DismissPhrase.matches("is that all the files in the folder you found when you looked earlier today"))
 }
+
+@Test func escIsTakenOnlyWhileSheSpeaksOrInThePhone() {
+    #expect(EscapeKey.owner(speaking: true, phoneIsKey: false) == .global)
+    #expect(EscapeKey.owner(speaking: false, phoneIsKey: false) == .nobody) // listening, cooldown, follow-up: yours
+    #expect(EscapeKey.owner(speaking: false, phoneIsKey: true) == .phone)
+    #expect(EscapeKey.owner(speaking: true, phoneIsKey: true) == .phone)    // the window has it; no grab needed
+}

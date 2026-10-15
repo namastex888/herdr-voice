@@ -54,12 +54,13 @@ extension CompanionController {
         phoneWindow?.collapse()
     }
 
-    /// Esc while the phone has focus: the shade up, the conversation over, or the phone back into the orb.
+    /// Esc while the phone has focus: the shade up, her speech or the conversation over, or the phone back into
+    /// the orb.
     func escapeInPhone() {
         if phone.shadeOpen {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { phone.shadeOpen = false }
-        } else if !conversation.isIdle {
-            dismissConversation()
+        } else if !conversation.isIdle || chat.controls.speaking {
+            escape()
         } else {
             collapsePhone()
         }
