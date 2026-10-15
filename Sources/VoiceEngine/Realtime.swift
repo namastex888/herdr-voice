@@ -14,8 +14,9 @@ import os
     private var instructions: String
     /// The next renewal starts a fresh session (with the recap) instead of resuming, so new instructions take hold.
     private var renewFresh = false
-    /// What the voice is asked to say when a session first comes up.
-    private let greeting: String
+    /// What the voice is asked to say when a session first comes up (or after a provider switch). The companion
+    /// updates it as it learns: only a new hire's first session greets as one.
+    public var greeting: String
     /// The tools offered now: the host's, or the narrower set routed for the current turn (see `setTools`).
     private var tools: ToolList
     /// What the session is doing, for a UI: both sides of the conversation, tool calls and status lines.
@@ -546,6 +547,21 @@ import os
             send(.updateInstructions(text)) // on the same socket, so after a setup that is still being answered
             return
         }
+        renewFreshWhenIdle()
+    }
+
+    /// Changes the voice from the next setup on. A live session can't change its voice once it has spoken, so the
+    /// connection is renewed fresh (when idle) and the recap carries the conversation over.
+    public func setVoice(_ name: String) {
+        guard !name.isEmpty, name != voice else { return }
+        voice = name
+        guard status == .live else { return }
+        renewFreshWhenIdle()
+    }
+
+    /// Renews into a fresh session (not a resumed one, which would keep the old setup): right away, or once the
+    /// current reply and tool calls finish.
+    private func renewFreshWhenIdle() {
         renewFresh = true
         if !established || responseActive || audio.isSpeaking || replies.callsInFlight > 0 {
             renewWhenIdle = true
@@ -870,7 +886,7 @@ import os
     private func renewConnection() {
         renewWhenIdle = false
         guard status == .live, let old = socket else { return }
-        note(renewFresh ? "↻ renewing the connection with new instructions"
+        note(renewFresh ? "↻ renewing the connection with the new setup"
              : "↻ renewing the connection (the provider limits how long one lasts)")
         socket = nil // its close must not count as a failure
         old.cancel(with: .normalClosure, reason: nil)
