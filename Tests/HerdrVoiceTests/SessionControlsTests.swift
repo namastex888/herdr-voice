@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import HerdrVoiceCore
 
@@ -116,4 +117,40 @@ private func mood(_ c: SessionControls, agentsWorking: Bool = false) -> Mood {
     let early = replies.resume() // a call from the paused turn is still running
     let afterCall = replies.callFinished()
     #expect(!early && afterCall)
+}
+
+// The 0.2.1 mute bug: Mute was a toggle of whatever held when the press landed, so a press delivered twice muted and
+// at once unmuted ("muted", then "listening"), and the next sentence was heard. A press now asks for a state.
+
+@Test func aPressDeliveredTwiceLeavesTheStateItAskedFor() {
+    let shown = controls()
+    let mute = shown.mutePress
+    let once = shown.applying(mute), twice = once.applying(mute)
+    #expect(mute == .mute(true))
+    #expect(once.muted && twice.muted && !twice.listening && twice.state == "Muted")
+
+    let pause = shown.pausePress
+    #expect(shown.applying(pause).applying(pause).paused)
+
+    let disconnect = shown.connectPress
+    let closed = shown.applying(disconnect).applying(disconnect)
+    #expect(disconnect == .connect(false) && closed.link == .disconnected && !closed.listening)
+    let connect = closed.connectPress
+    #expect(connect == .connect(true) && closed.applying(connect).applying(connect).link == .connected)
+}
+
+@Test func eachTitleMatchesThePressItMakes() {
+    #expect(controls(muted: true).mutePress == .mute(false) && controls(muted: true).muteTitle == "Unmute")
+    #expect(controls(paused: true).pausePress == .pause(false) && controls(paused: true).pauseTitle == "Resume")
+    #expect(controls(.idle).connectPress == .connect(false) && controls(.offline).connectPress == .connect(true))
+    #expect(SessionControls().applying(.mute(true)) == SessionControls()) // nothing to press without a session
+}
+
+@Test func hotkeyPressesTooCloseTogetherCountOnce() {
+    var debounce = PressDebounce(interval: 0.35)
+    let t = Date(timeIntervalSince1970: 1000)
+    let first = debounce.accept(at: t)
+    let again = debounce.accept(at: t.addingTimeInterval(0.1))   // the same press, delivered again
+    let second = debounce.accept(at: t.addingTimeInterval(0.6))  // a second press on purpose
+    #expect(first && !again && second)
 }

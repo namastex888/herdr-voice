@@ -670,16 +670,22 @@ import os
         }
     }
 
-    /// Mutes or unmutes whatever the connection is doing. `toggleMute` reads a press while offline as "reconnect",
-    /// which suits a hotkey; a Mute button has to mute. Unmuting a session that closed while muted reopens it the
+    /// Sets the mute to `on`, whatever the connection is doing; asking again for the state it holds does nothing.
+    /// `toggleMute` reads a press while offline as "reconnect", which suits the plugin's hotkey; a Mute button has
+    /// to mute, so muting never goes through the toggle. Unmuting a session that closed while muted reopens it the
     /// way `toggleMute` does.
     public func setMuted(_ on: Bool) {
         guard on != muted else { return }
-        guard on, status == .disconnected else { return toggleMute() }
-        muted = true
+        if !on, status == .disconnected, !disconnectedByUser { return toggleMute() }
+        muted = on
         audio.setMuted(micOff)
-        note("🔇 muted")
+        if on { clearHeardInput() }
+        note(on ? "🔇 muted" : !micOff ? "🎙  listening" : "🎙  unmuted (still \(paused ? "paused" : "disconnected"))")
     }
+
+    /// Whether the mic queue lets speech through, to the session or held for it. Closed while muted, paused or
+    /// disconnected by the user.
+    public var micOpen: Bool { micShared.withLock { !$0.muted } }
 
     /// Stops the assistant mid-sentence (Esc or a spoken "stop"): cancels generation and drops queued audio.
     public func stopSpeech(reason: String) {

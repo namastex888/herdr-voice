@@ -70,6 +70,7 @@ import VoiceEngine
     private var recentTurns: [String] = []
     private var refreshTimer: Timer?
     private var activeObserver: NSObjectProtocol?
+    private var muteDebounce = PressDebounce()
 
     /// `store` is where `config.json` lives; the first time it is built from 0.1.0's settings (`legacyDefaults`) and
     /// skills folder. nil keeps the configuration in memory. `gate` holds proposals until the human's own yes.
@@ -135,7 +136,7 @@ import VoiceEngine
         self.window = window
         installStatusItem()
         installOrb()
-        Hotkey.registerMute { [weak self] in self?.toggleMute() }
+        Hotkey.registerMute { [weak self] in self?.hotkeyMute() }
         startSession()
         watchForHarnesses()
         window.show()
@@ -217,29 +218,32 @@ import VoiceEngine
 
     // MARK: session controls (the chat's control bar, the orb's menu, the menu bar and ⌥⌘M)
 
-    /// Mute always mutes, even while the session is closed (the engine's toggle would read that press as reconnect;
-    /// Connect does that here).
-    func toggleMute() {
+    /// Does what a control's press asks for. Each control passes the press its title promised when it was shown
+    /// (`SessionControls.mutePress` and friends), so a press that arrives twice lands on the same state twice
+    /// instead of flipping it back. Mute always mutes, even while the session is closed (the engine's toggle would
+    /// read that press as reconnect; Connect does that here).
+    func press(_ press: ControlPress) {
         guard let session else { return }
-        session.setMuted(!session.muted)
+        switch press {
+        case .mute(let on):
+            _ = muteDebounce.accept() // ⌥⌘M right after this is the same press
+            session.setMuted(on)
+        case .pause(let on): if on { session.pause() } else { session.resume() }
+        case .connect(let on): if on { session.reconnect() } else { session.disconnect() }
+        }
         syncControls()
     }
 
-    func togglePause() {
-        guard let session else { return }
-        if session.paused { session.resume() } else { session.pause() }
+    /// ⌥⌘M is a toggle by nature: it presses whatever the Mute control offers now. A press delivered twice, or
+    /// right after a Mute press elsewhere, counts once.
+    func hotkeyMute() {
+        guard muteDebounce.accept() else { return }
         syncControls()
+        press(chat.controls.mutePress)
     }
 
     func stopSpeaking() {
         session?.stopSpeech(reason: "you pressed Stop")
-        syncControls()
-    }
-
-    /// Disconnect while the session is open or idle; otherwise Connect opens it now.
-    func toggleConnection() {
-        guard let session else { return }
-        if chat.controls.connectCloses { session.disconnect() } else { session.reconnect() }
         syncControls()
     }
 
@@ -264,10 +268,10 @@ import VoiceEngine
         let c = chat.controls
         return [
             ("Voice: \(c.state)", false, {}),
-            (c.muteTitle, c.available, { [weak self] in self?.toggleMute() }),
-            (c.pauseTitle, c.available, { [weak self] in self?.togglePause() }),
+            (c.muteTitle, c.available, { [weak self] in self?.press(c.mutePress) }),
+            (c.pauseTitle, c.available, { [weak self] in self?.press(c.pausePress) }),
             (SessionControls.stopTitle, c.canStopSpeaking, { [weak self] in self?.stopSpeaking() }),
-            (c.connectTitle, c.available, { [weak self] in self?.toggleConnection() }),
+            (c.connectTitle, c.available, { [weak self] in self?.press(c.connectPress) }),
         ]
     }
 

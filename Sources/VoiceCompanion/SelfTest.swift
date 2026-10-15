@@ -134,31 +134,45 @@ import VoiceEngine
           expected.allSatisfy(orb.contains) && expected.allSatisfy(menuBar.contains), orb.joined(separator: ", "))
     check("Stop speaking is off while nothing is said", enabled(SessionControls.stopTitle) == false, "")
 
-    controller.toggleMute()
-    let muted = session.muted && state() == "Muted" && titles().contains("Unmute") && !controller.chat.controls.listening
-    controller.toggleMute()
-    check("Mute mutes even while the session is closed, and unmutes", muted && !session.muted, state())
+    // The 0.2.1 bug: one Mute press logged "muted" then "listening" and the next sentence was heard. One press, and
+    // the same press delivered again (a double click, the menu and ⌥⌘M together), must leave it muted, mic closed.
+    let mute = controller.chat.controls.mutePress
+    controller.press(mute)
+    let mutedOnce = session.muted && !session.micOpen
+    controller.press(mute)
+    let muted = mutedOnce && session.muted && !session.micOpen && state() == "Muted" && titles().contains("Unmute")
+        && !controller.chat.controls.listening
+    check("one Mute press leaves the session muted and the mic gate closed, even delivered twice", muted, state())
+    controller.hotkeyMute() // ⌥⌘M right after: the same press again as far as anyone meant it
+    check("⌥⌘M a moment after a Mute press counts once", session.muted && !session.micOpen, state())
+    controller.press(controller.chat.controls.mutePress)
+    check("Unmute opens the mic again", !session.muted && session.micOpen, state())
 
-    controller.togglePause()
-    let paused = session.paused && state() == "Paused" && titles().contains("Resume")
+    let pause = controller.chat.controls.pausePress
+    controller.press(pause)
+    controller.press(pause)
+    let paused = session.paused && !session.micOpen && state() == "Paused" && titles().contains("Resume")
         && Activity.mood(controls: controller.chat.controls, loading: false, agentsWorking: false, micQuiet: true) == .muted
-    controller.togglePause()
-    check("Pause holds (muted mood) and Resume lets go", paused && !session.paused, state())
+    controller.press(controller.chat.controls.pausePress)
+    check("Pause holds (muted mood), even pressed twice, and Resume lets go", paused && !session.paused && session.micOpen,
+          state())
 
     let idleOffersDisconnect = state() == "Idle" && titles().contains("Disconnect") // it would reopen on speech
-    controller.toggleConnection()
+    let disconnect = controller.chat.controls.connectPress
+    controller.press(disconnect)
+    controller.press(disconnect)
     let disconnected = idleOffersDisconnect && session.disconnectedByUser && state() == "Disconnected"
-        && titles().contains("Connect")
+        && titles().contains("Connect") && !session.micOpen
         && Activity.mood(controls: controller.chat.controls, loading: false, agentsWorking: false, micQuiet: true) == .offline
     session.toggleMute() // the engine's toggle (the plugin's hotkey) mutes, and doesn't reopen what the user closed
     let stays = session.disconnectedByUser && session.muted && session.status == .disconnected
     session.toggleMute()
-    controller.toggleConnection()
-    check("Disconnect stays closed (offline mood) until Connect", disconnected && stays && !session.disconnectedByUser,
-          state())
+    controller.press(controller.chat.controls.connectPress)
+    check("Disconnect stays closed (offline mood), even pressed twice, until Connect",
+          disconnected && stays && !session.disconnectedByUser, state())
 
     session.disconnect()
-    controller.togglePause()
+    session.pause()
     controller.send("are you there")
     check("a typed message ends a disconnect and a pause",
           !session.disconnectedByUser && !session.paused && controller.chat.lines.contains { $0.text == "are you there" },

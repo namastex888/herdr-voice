@@ -112,11 +112,11 @@ struct ControlBar: View {
     private func buttons(_ c: SessionControls) -> some View {
         HStack(spacing: 6) {
             control(c.muteTitle, c.muteSymbol, help: "\(c.muteTitle) the mic (\(Hotkey.label)); the voice can still talk",
-                    on: c.muted) { controller.toggleMute() }
+                    on: c.muted) { controller.press(c.mutePress) }
             control(c.pauseTitle, c.pauseSymbol,
                     help: c.paused ? "Resume: the mic and the voice come back, and what waited is said"
                                    : "Pause: mic off, speech stopped, replies and agent reports held until you resume",
-                    on: c.paused) { controller.togglePause() }
+                    on: c.paused) { controller.press(c.pausePress) }
             control(SessionControls.stopTitle, SessionControls.stopSymbol, help: "Stop speaking (Esc)", on: false) {
                 controller.stopSpeaking()
             }
@@ -124,7 +124,7 @@ struct ControlBar: View {
             control(c.connectTitle, c.connectSymbol,
                     help: c.connectCloses ? "Disconnect: close the session now; it stays closed until you connect or type"
                                                : "Connect: open the session now",
-                    on: c.link == .disconnected) { controller.toggleConnection() }
+                    on: c.link == .disconnected) { controller.press(c.connectPress) }
         }
         .disabled(!c.available)
         .controlSize(.small)

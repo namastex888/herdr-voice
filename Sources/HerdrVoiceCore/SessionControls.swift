@@ -84,6 +84,50 @@ public struct SessionControls: Equatable, Sendable {
     public var connectSymbol: String { connectCloses ? "phone.down.fill" : "phone.fill" }
     /// Stop speaking only means something while the voice is audible.
     public var canStopSpeaking: Bool { available && speaking }
+
+    // What a press asks for. Each control asks for the state its title promised when it was shown ("Mute" mutes,
+    // "Unmute" unmutes), never for the opposite of whatever holds when the press lands: a press that arrives twice
+    // (a double click, the menu and the hotkey at once, two apps on one hotkey) then lands on the same state twice,
+    // where a toggle flipped it straight back.
+
+    public var mutePress: ControlPress { .mute(!muted) }
+    public var pausePress: ControlPress { .pause(!paused) }
+    public var connectPress: ControlPress { .connect(!connectCloses) }
+
+    /// These controls once the session has done what `press` asks.
+    public func applying(_ press: ControlPress) -> SessionControls {
+        guard available else { return self }
+        var next = self
+        switch press {
+        case .mute(let on): next.muted = on
+        case .pause(let on): next.paused = on
+        case .connect(let on):
+            if on, link == .disconnected || link == .offline { next.link = .connected }
+            if !on, link != .disconnected { next.link = .disconnected }
+        }
+        return next
+    }
+}
+
+/// One press of a session control, with the state it asks for.
+public enum ControlPress: Equatable, Sendable {
+    case mute(Bool), pause(Bool), connect(Bool)
+}
+
+/// A hotkey is a toggle, so a second delivery of one press would undo the first: presses closer together than
+/// `interval` count once. Nobody means two mutes a third of a second apart.
+public struct PressDebounce: Sendable {
+    public let interval: TimeInterval
+    private var last = Date.distantPast
+
+    public init(interval: TimeInterval = 0.35) { self.interval = interval }
+
+    /// True if this press counts.
+    public mutating func accept(at now: Date = Date()) -> Bool {
+        guard now.timeIntervalSince(last) >= interval else { return false }
+        last = now
+        return true
+    }
 }
 
 /// Where an agent report (or a typed message) goes, given the session's controls.
