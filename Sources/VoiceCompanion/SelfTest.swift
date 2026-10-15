@@ -4,10 +4,11 @@ import SwiftUI
 import VoiceEngine
 
 /// `VoiceCompanion --self-test`: builds what a launch builds except the voice session (no microphone, no network,
-/// no API key), from a scratch configuration, opens the chat panel and each tab, pushes a typed turn through routing,
-/// runs two read-only Mac actions, and checks the new hire: factory state, a greeting that names its harnesses and
-/// asks for a first task, and self-changes that stop for the user's yes and change nothing without it. Then drives the
-/// session controls on a session it never starts. Prints each check; exits 0 only if all pass.
+/// no API key), from a scratch configuration: shows the orb, grows it into the phone and back, renders every screen,
+/// pushes a typed turn through routing, runs two read-only Mac actions, and checks the new hire: factory state, a
+/// greeting that names its harnesses and asks for a first task, and self-changes that stop for the user's yes and
+/// change nothing without it. Then drives the session controls and tap-to-talk on a session it never starts. Prints
+/// each check; exits 0 only if all pass.
 @MainActor func runSelfTest() -> Int32 {
     var failures = 0
     func check(_ name: String, _ ok: Bool, _ detail: String = "") {
@@ -24,9 +25,15 @@ import VoiceEngine
     let controller = CompanionController(store: CompanionStore(directory: scratch), legacyDefaults: nil, gate: gate)
     let registry = controller.registry
 
-    let window = ChatWindow(content: CompanionView(controller: controller, chat: controller.chat, keys: controller.keys))
-    window.show()
-    check("chat panel shows and can take typing", window.isVisible && window.panel.canBecomeKey)
+    let window = PhoneWindow(model: controller.phone, content: PhoneRoot(controller: controller, model: controller.phone,
+                                                                         live: controller.live, device: controller.device))
+    controller.phoneWindow = window
+    window.showOrb()
+    let orbFrame = window.panel.frame
+    let corner = (NSScreen.screens.first { $0.frame.intersects(orbFrame) } ?? NSScreen.main)?.visibleFrame ?? .zero
+    check("the orb shows in the screen's bottom-right corner",
+          window.panel.isVisible && orbFrame.width < 200 && abs(orbFrame.maxX - corner.maxX) < 60
+              && abs(orbFrame.minY - corner.minY) < 60, "\(Int(orbFrame.width))×\(Int(orbFrame.height))")
 
     // Factory state: the harnesses, identity, empty memory and default settings, and nothing learned.
     check("a new hire starts from the factory configuration", registry.tree == .factory)
@@ -91,11 +98,7 @@ import VoiceEngine
     check("your edits apply, revert, and reset to a new hire", edited && reverted && registry.tree == .factory,
           controller.notice)
 
-    for tab in CompanionTab.allCases {
-        controller.tab = tab
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1)) // a beat for SwiftUI to lay the tab out
-    }
-    check("each tab opens", window.isVisible && controller.harnesses.contains { $0.id == "harness.mac" })
+    checkPhone(controller, window, check)
 
     let session = checkSessionControls(controller, check)
     checkActivation(controller, session, check)
@@ -110,8 +113,8 @@ import VoiceEngine
 /// only clear the disconnect and leave the session to open once the runtime is up).
 @MainActor private func checkSessionControls(_ controller: CompanionController,
                                              _ check: (String, Bool, String) -> Void) -> Realtime {
-    func titles() -> [String] { controller.orbMenu().map(\.title) }
-    func enabled(_ title: String) -> Bool? { controller.orbMenu().first { $0.title == title }?.enabled }
+    func titles() -> [String] { controller.controlChoices().map(\.title) }
+    func enabled(_ title: String) -> Bool? { controller.controlChoices().first { $0.title == title }?.enabled }
     let state = { controller.chat.controls.state }
 
     let none = controller.controlChoices()
@@ -124,14 +127,13 @@ import VoiceEngine
     controller.attach(session)
     session.onUserTurn = nil // a typed turn below would be routed, and the router may call Jev
 
-    let bar = NSHostingView(rootView: ControlBar(controller: controller, chat: controller.chat))
-    bar.layoutSubtreeIfNeeded()
-    let size = bar.fittingSize
-    check("the control bar renders", size.width > 0 && size.height > 0, "\(Int(size.width))×\(Int(size.height))")
+    let tiles = controller.quickTiles.map(\.id)
+    check("the shade has a tile for the mic, pause, the session, activation and stop speaking",
+          ["mic", "pause", "session", "activation", "stop"].allSatisfy(tiles.contains), tiles.joined(separator: ", "))
 
     let orb = titles(), menuBar = controller.statusMenuItems().map(\.title)
     let expected = ["Voice: Offline", "Mute", "Pause", SessionControls.stopTitle, "Connect"]
-    check("the orb's menu and the menu bar have every control",
+    check("the orb's right-click menu and the menu bar have every control",
           expected.allSatisfy(orb.contains) && expected.allSatisfy(menuBar.contains), orb.joined(separator: ", "))
     check("Stop speaking is off while nothing is said", enabled(SessionControls.stopTitle) == false, "")
 
@@ -229,6 +231,40 @@ import VoiceEngine
     controller.escape()
     check("a double tap is hands-free; Esc ends it and closes",
           handsFree && !controller.handsFree && controller.conversation == .idle && session.standby, phase())
+}
+
+/// The orb grows into the phone and back in the real window, and every screen (lock, home, Messages, Settings,
+/// Skills, an app, the shade), the orb and a frame of the morph render to images with something drawn.
+@MainActor private func checkPhone(_ controller: CompanionController, _ window: PhoneWindow,
+                                   _ check: (String, Bool, String) -> Void) {
+    controller.openPhone(.home, activate: false)
+    RunLoop.main.run(until: Date().addingTimeInterval(1)) // the spring settles
+    let open = window.panel.frame
+    check("the orb grows into the phone, anchored at its corner",
+          controller.phone.expanded && controller.phone.morph == 1 && open.height >= PhoneWindow.phoneSize.height
+              && window.panel.canBecomeKey, "\(Int(open.width))×\(Int(open.height))")
+    for name in ["lock", "home", "messages", "settings", "skills"] {
+        controller.phone.go(PhoneScreen.named[name] ?? .home)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
+    controller.collapsePhone()
+    RunLoop.main.run(until: Date().addingTimeInterval(1))
+    check("the phone collapses back into the orb", !controller.phone.expanded && controller.phone.morph == 0
+          && window.panel.frame.height < 200, "\(Int(window.panel.frame.height)) high")
+
+    var drawn: [String] = [], blank: [String] = []
+    for shot in PhoneRender.shots(appID: "harness.mac") {
+        if let image = PhoneRender.image(shot, controller: controller), PhoneRender.looksDrawn(image) {
+            drawn.append(shot.name)
+        } else {
+            blank.append(shot.name)
+        }
+    }
+    controller.phone.morph = 0
+    controller.phone.expanded = false
+    controller.phone.shadeOpen = false
+    check("every screen renders: lock, home, messages, settings, skills, an app, the shade, the orb and the morph",
+          blank.isEmpty, blank.isEmpty ? drawn.joined(separator: ", ") : "blank: " + blank.joined(separator: ", "))
 }
 
 private func json(_ object: [String: Any]) -> String {

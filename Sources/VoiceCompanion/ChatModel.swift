@@ -2,7 +2,8 @@ import Foundation
 import HerdrVoiceCore
 import VoiceEngine
 
-/// What the chat panel shows: the conversation, the skills in play, and the session's state.
+/// What the phone's Messages, assistant sheet and shade show: the conversation, the skills in play, what came in,
+/// and the session's state.
 @MainActor final class ChatModel: ObservableObject {
     struct Line: Identifiable, Equatable {
         /// `ask`: a question waiting for the user's yes; `change`: a change she made to herself.
@@ -10,6 +11,17 @@ import VoiceEngine
         let id = UUID()
         let kind: Kind
         let text: String
+        var time = Date()
+
+        /// Belongs in the shade: a tool's result, a change she made, a question waiting for your yes, or news (an
+        /// agent's report, an error).
+        var isNotification: Bool {
+            switch kind {
+            case .result, .change, .ask: true
+            case .note: !ChatModel.isStatus(text)
+            case .you, .voice, .tool: false
+            }
+        }
     }
 
     /// Enough history to scroll back through a session without growing forever.
@@ -23,6 +35,20 @@ import VoiceEngine
     /// The session controls' state (see `CompanionController.syncControls`).
     @Published var controls = SessionControls()
     @Published var provider: Provider = .grok
+    /// The session's latest status line (connecting, closed while quiet, muted...), which the controls already show,
+    /// so it stays out of the conversation.
+    @Published private(set) var status = ""
+
+    /// Lines the session logs about its own state; the phone shows that state instead.
+    nonisolated static let statusMarks = ["●", "↻", "💤", "🎙", "🔇", "⏸", "▶", "⏏", "⏹", "⇄", "👋", "…"]
+
+    nonisolated static func isStatus(_ text: String) -> Bool { statusMarks.contains { text.hasPrefix($0) } }
+
+    /// What the shade lists, newest first.
+    var notifications: [Line] { Array(lines.filter(\.isNotification).suffix(30).reversed()) }
+
+    /// The conversation as Messages shows it: no status lines.
+    var conversation: [Line] { lines.filter { $0.kind != .note || !Self.isStatus($0.text) } }
 
     func append(_ event: SessionEvent) {
         switch event {
@@ -39,7 +65,8 @@ import VoiceEngine
                 let short = output.count > Self.resultPreview ? output.prefix(Self.resultPreview) + "…" : Substring(output)
                 add(.result, "\(name): \(short)")
             }
-        case .note(let text): add(.note, text)
+        case .note(let text):
+            if Self.isStatus(text) { status = text } else { add(.note, text) }
         }
     }
 

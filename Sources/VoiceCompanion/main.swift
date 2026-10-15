@@ -16,6 +16,9 @@ if CommandLine.arguments.contains("--self-test") {
 if let flag = CommandLine.arguments.firstIndex(of: "--dump-tools"), CommandLine.arguments.indices.contains(flag + 1) {
     exit(dumpTools(to: CommandLine.arguments[flag + 1]))
 }
+if let flag = CommandLine.arguments.firstIndex(of: "--render-phone"), CommandLine.arguments.indices.contains(flag + 1) {
+    exit(renderPhone(to: CommandLine.arguments[flag + 1]))
+}
 
 // One companion at a time: a second would share the mic and hear the first one's voice.
 if let id = Bundle.main.bundleIdentifier, NSRunningApplication.runningApplications(withBundleIdentifier: id).count > 1 {

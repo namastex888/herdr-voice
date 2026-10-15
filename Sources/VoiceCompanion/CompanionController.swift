@@ -3,7 +3,7 @@ import HerdrVoiceCore
 import VoiceEngine
 
 /// Owns the companion: the skill registry (the configuration tree and its components), routing, the voice session,
-/// the chat panel, the orb and the menu bar item. The tree is the one record of what she is set to: the app reads it
+/// the phone (which is also the orb) and the menu bar item. The tree is the one record of what she is set to: the app reads it
 /// after every settle and changes it only through the registry's human edits, so the voice's own proposals, a revert
 /// and a reset all reach the live session the same way. Every user turn, spoken or typed, is routed to a learned
 /// skill or a harness's controls while the voice answers.
@@ -48,7 +48,10 @@ import VoiceEngine
     let keys: CompanionKeys
     let chat = ChatModel()
     let registry: SkillRegistry
-    @Published var tab: CompanionTab = .chat
+    /// The phone's screen, shade and morph; the live levels its orb and light bar draw; the Mac's battery and network.
+    let phone = PhoneModel()
+    let live = LiveLevels()
+    let device = DeviceStatus()
     @Published private(set) var tree: ConfigTree
     @Published private(set) var harnesses: [HarnessInfo] = []
     @Published private(set) var skills: [SkillInfo] = []
@@ -62,8 +65,11 @@ import VoiceEngine
     private var router: any SkillRouter = WordRouter()
     private(set) var session: Realtime?
     private let configDirectory: URL?
-    var window: ChatWindow?
-    private var orb: Orb?
+    var phoneWindow: PhoneWindow?
+    /// Drives the orb, the light bar and the conversation's clock.
+    var frameTimer: Timer?
+    /// When the current conversation began: the assistant sheet shows only what was said since.
+    @Published var conversationStarted = Date.distantPast
     private var statusItem: NSStatusItem?
     /// The status menu's delegate (menus hold theirs weakly).
     private var menuRebuilder: MenuRebuilder?
@@ -76,13 +82,12 @@ import VoiceEngine
     var turns = TurnTaking()
     var keyMonitor: ActivationKeyMonitor?
     var wakeWord: WakeWordSpotter?
-    var activationTimer: Timer?
     /// The conversation as the views show it.
     @Published var conversation: TurnTaking.Phase = .idle
     @Published var handsFree = false
     /// The activation key can't be watched (no Input Monitoring) or the wake word can't listen: what she does instead.
     @Published var activationNote = ""
-    /// The conversation opened the chat, so its end puts it away again.
+    /// The conversation opened the phone, so its end puts it away again.
     var openedByActivation = false
 
     /// `store` is where `config.json` lives; the first time it is built from 0.1.0's settings (`legacyDefaults`) and
@@ -145,15 +150,19 @@ import VoiceEngine
     // MARK: lifecycle
 
     func start() {
-        let window = ChatWindow(content: CompanionView(controller: self, chat: chat, keys: keys))
-        self.window = window
+        phone.theme = PhoneTheme(seed: accent)
+        let window = PhoneWindow(model: phone, content: PhoneRoot(controller: self, model: phone, live: live, device: device))
+        phoneWindow = window
+        device.start()
         installStatusItem()
-        installOrb()
+        window.showOrb()
+        startFrames()
         Hotkey.registerMute { [weak self] in self?.hotkeyPressed() }
         startSession()
         applyActivation()
         watchForHarnesses()
-        window.show()
+        // Without a key there's nothing to talk to yet: open on Settings, where the key goes.
+        if session == nil { openPhone(.settings, activate: false) } else { showFirstRunHint() }
     }
 
     /// Opens the voice session for the chosen provider, or points the user at Settings when it has no key yet.
@@ -162,7 +171,7 @@ import VoiceEngine
         chat.provider = provider
         guard let key = keys.key(for: provider) else {
             chat.note("Add a \(provider.menuTitle) API key in Settings to start talking.")
-            tab = .settings
+            phone.screen = .settings
             return
         }
         let session = Realtime(provider: provider, key: key, voice: voice, host: registry,
@@ -225,14 +234,14 @@ import VoiceEngine
         guard let session else {
             chat.append(.you(text))
             chat.note("Add a \(provider.menuTitle) API key in Settings first.")
-            tab = .settings
+            phone.screen = .settings
             return
         }
         session.sendTyped(text) // ends a pause or a disconnect: typing is an explicit request
         syncControls()
     }
 
-    // MARK: session controls (the chat's control bar, the orb's menu, the menu bar and ⌥⌘M)
+    // MARK: session controls (the shade's tiles, the orb's menu, the menu bar and ⌥⌘M)
 
     /// Does what a control's press asks for. Each control passes the press its title promised when it was shown
     /// (`SessionControls.mutePress` and friends), so a press that arrives twice lands on the same state twice
@@ -273,7 +282,7 @@ import VoiceEngine
                                speaking: session.audio.isSpeaking)
     }
 
-    /// Copies the session's state to the controls: every orb frame, and right after a control is used.
+    /// Copies the session's state to the controls: every frame, and right after a control is used.
     func syncControls() {
         let controls = Self.controls(of: session)
         if chat.controls != controls { chat.controls = controls }
@@ -281,8 +290,8 @@ import VoiceEngine
 
     /// The controls as menu entries, for the orb's menu and the menu bar: the state first (disabled), then each
     /// control under the title it has now.
-    func controlChoices() -> [(title: String, enabled: Bool, action: () -> Void)] {
-        syncControls()
+    func controlChoices(syncing: Bool = true) -> [(title: String, enabled: Bool, action: () -> Void)] {
+        if syncing { syncControls() } // not from a view's body: that would change what it is drawing
         let c = chat.controls
         return [
             ("Voice: \(c.state)", false, {}),
@@ -337,6 +346,7 @@ import VoiceEngine
         let before = settings
         reload()
         let after = settings
+        followAccent()
         if after.routeWithJev != before.routeWithJev || after.jevModel != before.jevModel { refreshRouter() }
         if after.activation != before.activation || after.activationKey != before.activationKey
             || after.followUpSeconds != before.followUpSeconds || after.wakePhrase != before.wakePhrase {
@@ -357,7 +367,7 @@ import VoiceEngine
         guard let key = keys.key(for: provider) else {
             chat.note("\(provider.menuTitle) has no API key yet; add one in Settings.")
             notice = "Add a \(provider.menuTitle) key below to talk with it."
-            tab = .settings
+            phone.screen = .settings
             return
         }
         guard let session else { return startSession() }
@@ -373,8 +383,8 @@ import VoiceEngine
 
     // MARK: the human's own edits (each applies at once and is logged as theirs)
 
-    /// Runs one human edit; what went wrong shows on the tab they're on.
-    private func edit(_ change: () throws -> Void) {
+    /// Runs one human edit; what went wrong shows on the screen they're on.
+    func edit(_ change: () throws -> Void) {
         do {
             try change()
             notice = ""
@@ -519,60 +529,7 @@ import VoiceEngine
         NSWorkspace.shared.open(folder)
     }
 
-    /// A conversation started by a tap or the wake word shows the chat, without taking focus from the app you're
-    /// in; its end puts the chat away again if that's what showed it.
-    func showConversation() {
-        guard let window, !window.isVisible else { return }
-        openedByActivation = true
-        window.panel.orderFrontRegardless()
-    }
-
-    func hideConversation() {
-        guard openedByActivation else { return }
-        openedByActivation = false
-        window?.panel.orderOut(nil)
-    }
-
     // MARK: orb and menu bar
-
-    private func installOrb() {
-        let orb = Orb(onClick: { [weak self] in self?.window?.toggle() },
-                      menuChoices: { [weak self] in self?.orbMenu() ?? [] },
-                      onQuit: { [weak self] in self?.quit() })
-        orb.showInScreenCorner()
-        orb.run { [weak self] in self?.frame() ?? Orb.Frame(mood: .offline, mic: 0, voice: 0, thinking: false) }
-        self.orb = orb
-    }
-
-    func orbMenu() -> [Orb.MenuChoice] {
-        let chatShown = window?.isVisible ?? false
-        var choices = [
-            Orb.MenuChoice(title: chatShown ? "Hide chat" : "Show chat", checked: false, enabled: true,
-                           separatorAfter: true) { [weak self] in self?.window?.toggle() },
-        ]
-        let controls = controlChoices()
-        choices += controls.enumerated().map { index, control in
-            Orb.MenuChoice(title: control.title, checked: false, enabled: control.enabled,
-                           separatorAfter: index == controls.count - 1, action: control.action)
-        }
-        choices += CompanionKeys.providers.map { provider in
-            Orb.MenuChoice(title: provider.menuTitle, checked: provider == self.provider,
-                           enabled: keys.hasKey(provider)) { [weak self] in self?.chooseProvider(provider) }
-        }
-        return choices
-    }
-
-    /// Drives the orb each frame, and keeps the chat's controls current. Disconnected shows offline, paused muted.
-    private func frame() -> Orb.Frame {
-        syncControls()
-        guard let session else { return Orb.Frame(mood: .offline, mic: 0, voice: 0, thinking: false) }
-        let audio = session.audio, controls = chat.controls
-        let mood = Activity.mood(controls: controls, loading: false, agentsWorking: !session.busyAgents.isEmpty,
-                                 micQuiet: audio.micLevel < 0.02)
-        return Orb.Frame(mood: mood, mic: controls.listening ? audio.micLevel : 0,
-                         voice: audio.isSpeaking ? audio.outLevel : 0,
-                         thinking: session.status != .disconnected && session.thinking)
-    }
 
     private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -592,7 +549,9 @@ import VoiceEngine
     }
 
     func statusMenuItems() -> [NSMenuItem] {
-        var items: [NSMenuItem] = [ClosureMenuItem("Show Chat") { [weak self] in self?.window?.show() }, .separator()]
+        let shown = phone.expanded
+        var items: [NSMenuItem] = [ClosureMenuItem(shown ? "Hide Phone" : "Show Phone") { [weak self] in self?.togglePhone() },
+                                   .separator()]
         for control in controlChoices() {
             let item = ClosureMenuItem(control.title, control.action)
             item.isEnabled = control.enabled
@@ -600,14 +559,8 @@ import VoiceEngine
         }
         items += [
             .separator(),
-            ClosureMenuItem("Skills…") { [weak self] in
-                self?.tab = .skills
-                self?.window?.show()
-            },
-            ClosureMenuItem("Settings…", key: ",") { [weak self] in
-                self?.tab = .settings
-                self?.window?.show()
-            },
+            ClosureMenuItem("Skills…") { [weak self] in self?.openPhone(.skills, activate: true) },
+            ClosureMenuItem("Settings…", key: ",") { [weak self] in self?.openPhone(.settings, activate: true) },
             .separator(),
             ClosureMenuItem("Quit Voice Companion", key: "q") { [weak self] in self?.quit() },
         ]

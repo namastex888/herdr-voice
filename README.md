@@ -29,9 +29,23 @@ voice: Done. 42 tests pass; it fixed a null check in the login handler.
 
 ## Voice Companion (standalone app)
 
-This fork also builds **Voice Companion**, a menu bar app that doesn't need Herdr: a floating chat and orb that
-controls your Mac by voice or text. She starts like a new hire: she knows the controls she has and nothing else, and
-learns the rest from you.
+This fork also builds **Voice Companion**, a menu bar app that doesn't need Herdr: an orb in the bottom-right corner
+that grows into a phone and controls your Mac by voice or text. She starts like a new hire: she knows the controls she
+has and nothing else, and learns the rest from you.
+
+- **Tap to talk** (the default): tap Right ⌘ alone and talk; she answers once you stop (the provider's speech
+  detection, then a half-second cooldown in case you go on). After her reply you can keep talking for a follow-up
+  window (8 s); then the session closes, so nothing is billed between conversations. Tap again to talk over her or to
+  dismiss, double-tap for hands-free until Esc, "that's all" or another double tap. ⌘C and other chords never
+  activate. The key needs Input Monitoring; without it ⌥⌘M and the talk button do the same. **Wake word** does it
+  with "Hey Companion", recognized on the Mac; **Always on** keeps 0.2's open mic (the expensive one). Settings →
+  Listening picks the mode, the key, the follow-up time and the phrase.
+- **The phone**: click the orb (or tap the key) and it grows into an Android phone: a lock screen with the clock and
+  what came in, a home screen with each harness and learned skill as an app (and "Teach me" slots while she's new),
+  Messages, Skills, Settings, and a notification shade (pull down the status bar) with quick settings for the mic,
+  pause, the session, the listening mode and stop speaking. During a conversation an assistant sheet rises with
+  Google's four-colour light bar, what you said and what she says, and the follow-up countdown; when it ends the phone
+  shrinks back into the orb.
 
 - **Harnesses** are what she can control: the Mac (apps, links, files, volume, dark mode, clipboard, notifications,
   Shortcuts, battery, display sleep; AppleScript and shell commands if you switch them on), and Herdr when it's
@@ -45,23 +59,24 @@ learns the rest from you.
 - **Routing**: every turn, spoken or typed, goes to [Jev](https://docs.typesafe.ai/models) (`jev-1.14.0`) while the
   voice answers, choosing between her learned skills, a harness's raw controls and plain chat. Without a Jev key it
   routes by matching words, and the voice can always load a skill itself.
-- The **Skills** tab maps what she can do: what she controls (switch each harness and AppleScript on or off), what she
+- The **Skills** app maps what she can do: what she controls (switch each harness and AppleScript on or off), what she
   knows (each skill's steps, notes and status, with Forget), how she has changed (who changed what and when, each with
   Revert) and how she has grown. **Settings** edits her identity and memory, picks the voice model, stores keys in
   your Keychain (it can reuse MeetingPulse's Jev key) and can reset her to a new hire. Risky actions keep
   herdr-voice's rule: only your own yes confirms them.
-- **Session controls** sit under the chat's header on every tab, and in the orb's right-click menu and the menu bar,
-  next to the session's state (Connected, Idle, Muted, Paused, Disconnected, Offline). **Mute** turns the mic off
-  (`⌥⌘M`); she can still talk. **Pause** holds everything: mic off, speech cut, replies and agent reports kept until
-  **Resume**. **Stop speaking** cuts the current reply (also `Esc`). **Disconnect** closes the session now, so billing
-  stops, and nothing reopens it, not speech, not an agent report, until **Connect** or a message you type; reports that
-  came in meanwhile are said then. Typing a message also ends a pause.
+- **Session controls** are the shade's quick settings, the orb's right-click menu and the menu bar, next to the
+  session's state (Connected, Idle, Muted, Paused, Disconnected, Offline). **Mute** turns the mic off (`⌥⌘M`, which
+  starts a conversation instead while the activation key can't be watched); she can still talk. **Pause** holds
+  everything: mic off, speech cut, replies and agent reports kept until **Resume**. **Stop speaking** cuts the current
+  reply (`Esc` too; during a tap-to-talk conversation Esc ends it). **Disconnect** closes the session now, so billing
+  stops, and nothing reopens it, not speech, not an agent report, until **Connect**, a tap or a message you type;
+  reports that came in meanwhile are said then. Typing a message also ends a pause.
 - Everything she is lives in `~/Library/Application Support/Voice Companion/config.json`; 0.1.0's settings and
   learned skills are carried over the first time.
 
 Build, sign and notarize: `scripts/companion-build-dmg`, then `scripts/companion-notarize` (see
 [Packaging/VoiceCompanion/README.md](Packaging/VoiceCompanion/README.md)). `VoiceCompanion --self-test` checks a build
-without a microphone, network or key.
+without a microphone, network or key; `VoiceCompanion --render-phone DIR` writes each screen as a PNG.
 
 ## Features
 

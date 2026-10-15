@@ -10,8 +10,6 @@ import VoiceEngine
 extension CompanionController {
     /// After speech stops, how long to wait for more before asking for the reply (where the provider can hold one).
     static let cooldown: TimeInterval = 0.5
-    /// How often the conversation's clock ticks (cooldown, follow-up, timeouts).
-    static let activationTick: TimeInterval = 0.05
 
     var activationMode: ActivationMode { settings.activation }
 
@@ -28,13 +26,10 @@ extension CompanionController {
         if mode.opensOnRequest {
             if turns.phase.isIdle { session?.setStandby(true) }
             startKeyMonitor(settings.activationKey, notes: &notes)
-            startActivationClock()
         } else {
             activation(.reset)
             session?.setStandby(false)
             keyMonitor?.stop()
-            activationTimer?.invalidate()
-            activationTimer = nil
         }
 
         if mode == .wakeWord {
@@ -77,13 +72,6 @@ extension CompanionController {
             // Tap-to-talk still works: the key monitor runs in every on-request mode.
             self.activationNote = "The wake word can't listen: \(why). Tap \(self.settings.activationKey.title) to talk."
             self.chat.note(self.activationNote)
-        }
-    }
-
-    private func startActivationClock() {
-        guard activationTimer == nil else { return }
-        activationTimer = Timer.scheduledTimer(withTimeInterval: Self.activationTick, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tickActivation() }
         }
     }
 

@@ -13,18 +13,30 @@ import HerdrVoiceCore
 
     /// Bumped when a key is saved, so views that show which keys exist redraw.
     @Published private(set) var revision = 0
+    /// Which keys exist, read at launch and after each save. Reading the Keychain runs `security` and waits for it,
+    /// which spins the run loop: never while a view is being drawn, so views ask these instead.
+    @Published private(set) var saved: Set<Provider> = []
+    @Published private(set) var hasJevKey = false
     private let environment = ProcessInfo.processInfo.environment
+
+    init() { reload() }
+
+    func reload() {
+        saved = Set(Self.providers.filter { key(for: $0) != nil })
+        hasJevKey = jevKey != nil
+    }
 
     func key(for provider: Provider) -> String? {
         provider.apiKey(environment: environment)?.value
     }
 
-    func hasKey(_ provider: Provider) -> Bool { key(for: provider) != nil }
+    func hasKey(_ provider: Provider) -> Bool { saved.contains(provider) }
 
     /// Stores a pasted key after tidying it; false when it doesn't look like a key.
     func saveKey(_ raw: String, for provider: Provider) -> Bool {
         guard let clean = Keychain.cleanKey(raw), Keychain.store(service: provider.keyEnv, value: clean) else { return false }
         revision += 1
+        reload()
         return true
     }
 
@@ -35,6 +47,7 @@ import HerdrVoiceCore
     func saveJevKey(_ raw: String) -> Bool {
         guard let clean = Keychain.cleanKey(raw), Keychain.store(service: Self.jevService, value: clean) else { return false }
         revision += 1
+        reload()
         return true
     }
 
@@ -43,6 +56,7 @@ import HerdrVoiceCore
         guard let key = Keychain.password(service: Self.meetingPulseJevService),
               Keychain.store(service: Self.jevService, value: key) else { return false }
         revision += 1
+        reload()
         return true
     }
 }
