@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleName</key>
+	<string>Voice Companion</string>
+	<key>CFBundleDisplayName</key>
+	<string>Voice Companion</string>
+	<key>CFBundleIdentifier</key>
+	<string>ai.namastex.voicecompanion</string>
+	<key>CFBundleExecutable</key>
+	<string>VoiceCompanion</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<!-- scripts/companion-build-dmg replaces both versions from Packaging/VoiceCompanion/VERSION or its first argument. -->
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.0.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Voice Companion listens when you talk to it, and streams only your speech to the voice model you choose.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Voice Companion controls apps and system settings when you ask it to.</string>
+</dict>
+</plist>

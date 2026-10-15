@@ -7,3 +7,4 @@ local-openlive/dist/
 local-openlive/vendor/
 local-openlive/.local-model-inventory.json
 bench-results/
+dist/

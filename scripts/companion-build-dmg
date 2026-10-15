@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# Build, sign and package Voice Companion as a DMG.
+#
+#   scripts/companion-build-dmg [version]
+#
+# version   defaults to Packaging/VoiceCompanion/VERSION
+# IDENTITY  codesign identity (name or SHA-1); defaults to the first
+#           "Developer ID Application" identity in the keychain
+#
+# Produces dist/Voice Companion.app and dist/VoiceCompanion-<version>.dmg, both
+# signed but not notarized; scripts/companion-notarize does that.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+pkg=Packaging/VoiceCompanion
+product=VoiceCompanion
+app_name="Voice Companion"
+
+die() { echo "error: $*" >&2; exit 1; }
+step() { printf '\n==> %s\n' "$*"; }
+
+# Prints 1 when dotted version $1 is greater than $2.
+version_gt() {
+  local i a b
+  IFS=. read -r -a a <<<"$1"
+  IFS=. read -r -a b <<<"$2"
+  for i in 0 1 2; do
+    (( 10#${a[i]:-0} > 10#${b[i]:-0} )) && { echo 1; return; }
+    (( 10#${a[i]:-0} < 10#${b[i]:-0} )) && { echo 0; return; }
+  done
+  echo 0
+}
+
+version="${1:-$(tr -d '[:space:]' <"$pkg/VERSION")}"
+# CFBundleShortVersionString allows one to three period-separated integers.
+[[ "$version" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] || die "version must look like 1.2.3, got '$version'"
+
+app="dist/$app_name.app"
+dmg="dist/$product-$version.dmg"
+staging="dist/.dmg-staging-$version"
+trap 'rm -rf "$staging"' EXIT
+
+for tool in codesign hdiutil lipo otool plutil security shasum vtool; do
+  command -v "$tool" >/dev/null 2>&1 || die "$tool not found; install Xcode or its command line tools"
+done
+if [[ -f "$HOME/.swiftly/env.sh" ]]; then
+  set +u
+  # shellcheck disable=SC1091
+  . "$HOME/.swiftly/env.sh"
+  set -u
+fi
+command -v swift >/dev/null 2>&1 || die "swift not found"
+
+# ---------------------------------------------------------------- identity ----
+# Capture, then parse: `security | awk '...; exit'` can SIGPIPE under pipefail.
+if [[ -z "${IDENTITY:-}" ]]; then
+  ids="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+  IDENTITY="$(printf '%s\n' "$ids" | awk '/"Developer ID Application: / && !found { print $2; found = 1 }')"
+  [[ -n "$IDENTITY" ]] || die "no Developer ID Application identity in the keychain; set IDENTITY"
+  identity_name="$(printf '%s\n' "$ids" | awk -F'"' -v id="$IDENTITY" '$0 ~ id { print $2; exit }')"
+  echo "Signing identity: $identity_name ($IDENTITY)"
+else
+  echo "Signing identity (from IDENTITY): $IDENTITY"
+fi
+
+# ------------------------------------------------------------------- build ----
+step "Building $product $version (release)"
+# Universal and single-arch builds land in different directories; ask SwiftPM.
+# Prints the built executable's path, or nothing when the build fails.
+build() {
+  swift build -c release --product "$product" "$@" >&2 || return 0
+  printf '%s/%s\n' "$(swift build -c release --product "$product" "$@" --show-bin-path)" "$product"
+}
+# Judge the universal build by what lipo finds, not by the exit code: SwiftPM can
+# succeed while silently building fewer architectures than asked for.
+binary="$(build --arch arm64 --arch x86_64)"
+archs="$( [[ -n "$binary" ]] && lipo -archs "$binary" 2>/dev/null || true)"
+if [[ " $archs " == *" arm64 "* && " $archs " == *" x86_64 "* ]]; then
+  echo "Universal build succeeded (arm64 + x86_64)."
+else
+  echo >&2
+  echo "!!! Universal build FAILED (got: ${archs:-nothing}); falling back to arm64 only. This DMG will NOT run on Intel Macs. !!!" >&2
+  echo >&2
+  binary="$(build --arch arm64)"
+  [[ -n "$binary" ]] || die "the arm64 build failed too"
+  archs="$(lipo -archs "$binary")"
+fi
+[[ -x "$binary" ]] || die "build produced no executable at $binary"
+bin_dir="$(dirname "$binary")"
+echo "Architectures: $archs"
+
+bundles=("$bin_dir"/*.bundle)
+if [[ -e "${bundles[0]}" ]]; then
+  echo "warning: SwiftPM resource bundles exist in $bin_dir but are NOT packaged:" >&2
+  printf '  %s\n' "${bundles[@]}" >&2
+fi
+
+# ---------------------------------------------------------------- assemble ----
+step "Assembling $app"
+rm -rf "$app" "$dmg" "$staging"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+cp "$binary" "$app/Contents/MacOS/$product"
+cp "$pkg/Info.plist" "$app/Contents/Info.plist"
+plutil -replace CFBundleShortVersionString -string "$version" "$app/Contents/Info.plist"
+plutil -replace CFBundleVersion -string "$version" "$app/Contents/Info.plist"
+plutil -lint "$app/Contents/Info.plist" >/dev/null
+cp "$pkg/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
+printf 'APPL????' >"$app/Contents/PkgInfo"
+
+# ------------------------------------------------------------------ checks ----
+step "Checking linkage and deployment target"
+# Lines after each "(architecture …):" header are tab-indented dylib paths.
+links="$(otool -L "$app/Contents/MacOS/$product")"
+foreign="$(printf '%s\n' "$links" | awk '/^\t/ { print $1 }' | grep -Ev '^(/usr/lib/|/System/)' | sort -u || true)"
+if [[ -n "$foreign" ]]; then
+  echo "The binary links libraries outside /usr/lib and /System; nothing is embedded to satisfy them:" >&2
+  printf '%s\n' "$foreign" | sed 's/^/  /' >&2
+  exit 1
+fi
+echo "otool -L: only /usr/lib and /System libraries."
+
+min_os="$(plutil -extract LSMinimumSystemVersion raw -o - "$pkg/Info.plist")"
+build_info="$(vtool -show-build "$app/Contents/MacOS/$product")"
+for minos in $(printf '%s\n' "$build_info" | awk '$1 == "minos" { print $2 }'); do
+  [[ "$(version_gt "$minos" "$min_os")" == 0 ]] \
+    || die "binary requires macOS $minos but LSMinimumSystemVersion is $min_os"
+done
+echo "Deployment target: binary minos $(printf '%s\n' "$build_info" | awk '$1 == "minos" { print $2 }' | sort -u | tr '\n' ' ')<= LSMinimumSystemVersion $min_os"
+
+# -------------------------------------------------------------------- sign ----
+step "Signing $app (hardened runtime)"
+codesign --force --options runtime --timestamp \
+  --entitlements "$pkg/VoiceCompanion.entitlements" \
+  --sign "$IDENTITY" "$app"
+codesign --verify --deep --strict --verbose=2 "$app"
+details="$(codesign -dvv "$app" 2>&1)"
+printf '%s\n' "$details" | grep -E '^(Identifier|Authority|TeamIdentifier|Timestamp)=' || true
+case "$details" in
+  *"(runtime)"*) echo "Hardened runtime: on" ;;
+  *) die "signature lacks the hardened runtime flag" ;;
+esac
+case "$details" in
+  *"Timestamp="*) ;;
+  *) die "signature has no secure timestamp; notarization would reject it" ;;
+esac
+
+# --------------------------------------------------------------------- dmg ----
+step "Building $dmg"
+mkdir -p "$staging"
+ditto "$app" "$staging/$app_name.app"
+ln -s /Applications "$staging/Applications"
+hdiutil create -volname "$app_name" -srcfolder "$staging" -fs HFS+ -format UDZO -ov "$dmg" >/dev/null
+codesign --force --sign "$IDENTITY" --timestamp "$dmg"
+codesign --verify --strict --verbose=2 "$dmg"
+rm -rf "$staging"
+
+step "Done"
+echo "Architectures: $archs"
+echo "DMG:    $repo_root/$dmg"
+echo "SHA256: $(shasum -a 256 "$dmg" | awk '{ print $1 }')"
+echo "Signed with Developer ID but NOT notarized; run scripts/companion-notarize next."

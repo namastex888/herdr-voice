@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# Notarize, staple and Gatekeeper-check a Voice Companion DMG.
+#
+#   scripts/companion-notarize [path/to/VoiceCompanion-<version>.dmg]
+#
+# The DMG defaults to the newest dist/VoiceCompanion-*.dmg.
+#
+# Auth, first match wins:
+#   NOTARY_PROFILE      notarytool keychain profile
+#   NOTARYTOOL_KEY      App Store Connect API key (.p8), with
+#   NOTARYTOOL_KEY_ID   its key ID (default: taken from an AuthKey_<ID>.p8 file name) and
+#   NOTARYTOOL_ISSUER   its issuer ID (required for team keys)
+#   otherwise           the keychain profile "remotty-notary"
+#
+# Re-runnable: a DMG that already carries a valid stapled ticket skips the upload
+# and goes straight to the Gatekeeper checks.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+app_name="Voice Companion"
+
+die() { echo "error: $*" >&2; exit 1; }
+step() { printf '\n==> %s\n' "$*"; }
+
+for tool in codesign hdiutil plutil spctl xcrun; do
+  command -v "$tool" >/dev/null 2>&1 || die "$tool not found; install Xcode or its command line tools"
+done
+
+# --------------------------------------------------------------------- dmg ----
+dmg="${1:-}"
+if [[ -z "$dmg" ]]; then
+  shopt -s nullglob
+  candidates=("$repo_root"/dist/VoiceCompanion-*.dmg)
+  shopt -u nullglob
+  [[ "${#candidates[@]}" -gt 0 ]] || die "no dist/VoiceCompanion-*.dmg; run scripts/companion-build-dmg first"
+  newest="$(ls -t -- "${candidates[@]}")"
+  dmg="${newest%%$'\n'*}"
+fi
+[[ -f "$dmg" ]] || die "DMG not found: $dmg"
+echo "DMG: $dmg"
+
+# -------------------------------------------------------------------- auth ----
+if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+  auth=(--keychain-profile "$NOTARY_PROFILE")
+  auth_desc="keychain profile $NOTARY_PROFILE"
+elif [[ -n "${NOTARYTOOL_KEY:-}" ]]; then
+  [[ -f "$NOTARYTOOL_KEY" ]] || die "NOTARYTOOL_KEY not found: $NOTARYTOOL_KEY"
+  key_id="${NOTARYTOOL_KEY_ID:-}"
+  if [[ -z "$key_id" && "$(basename "$NOTARYTOOL_KEY")" =~ ^AuthKey_([A-Z0-9]+)\.p8$ ]]; then
+    key_id="${BASH_REMATCH[1]}"
+  fi
+  [[ -n "$key_id" ]] || die "set NOTARYTOOL_KEY_ID for $NOTARYTOOL_KEY"
+  auth=(--key "$NOTARYTOOL_KEY" --key-id "$key_id")
+  if [[ -n "${NOTARYTOOL_ISSUER:-}" ]]; then
+    auth+=(--issuer "$NOTARYTOOL_ISSUER")
+  else
+    echo "warning: NOTARYTOOL_ISSUER is unset; that only works for an individual API key, not a team key" >&2
+  fi
+  auth_desc="API key $key_id"
+else
+  auth=(--keychain-profile remotty-notary)
+  auth_desc="keychain profile remotty-notary"
+fi
+
+tmp_root="${TMPDIR:-/tmp}"
+work="$(mktemp -d "${tmp_root%/}/companion-notarize.XXXXXX")"
+mountpoint=""
+cleanup() {
+  if [[ -n "$mountpoint" ]]; then
+    hdiutil detach "$mountpoint" -quiet 2>/dev/null || hdiutil detach "$mountpoint" -force -quiet 2>/dev/null || true
+  fi
+  rm -rf "$work"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+# Read one key from notarytool's JSON output; empty when absent or not JSON.
+json_field() { plutil -extract "$1" raw -o - "$2" 2>/dev/null || true; }
+
+# ------------------------------------------------------------------ notarize ----
+if xcrun stapler validate -q "$dmg" >/dev/null 2>&1; then
+  step "Already notarized and stapled; skipping the upload"
+else
+  step "Checking the signature before upload"
+  codesign --verify --strict --verbose=2 "$dmg" \
+    || die "the DMG is not validly signed; rebuild it with scripts/companion-build-dmg"
+
+  step "Submitting to Apple with $auth_desc (waits up to 30 minutes)"
+  rc=0
+  xcrun notarytool submit "$dmg" "${auth[@]}" --wait --timeout 30m --output-format json \
+    >"$work/submit.json" 2>"$work/submit.err" || rc=$?
+  # A refused request prints plain text on stderr and no JSON; check for it first.
+  if grep -q 'HTTP status code: 403' "$work/submit.err" && grep -qi 'agreement' "$work/submit.err"; then
+    cat "$work/submit.err" >&2
+    echo "Apple refused the upload (403): the Apple Developer account holder must sign in at https://developer.apple.com/account and accept the pending Program License Agreement, then re-run this script; nothing was submitted." >&2
+    exit 1
+  fi
+  status="$(json_field status "$work/submit.json")"
+  id="$(json_field id "$work/submit.json")"
+  [[ -s "$work/submit.json" ]] && cat "$work/submit.json" && echo
+  if [[ -z "$status" ]]; then
+    cat "$work/submit.err" >&2
+    die "notarytool returned no status (exit $rc)"
+  fi
+  if [[ "$status" != "Accepted" ]]; then
+    echo "Notarization status: $status (submission ${id:-unknown})" >&2
+    if [[ "$status" == "In Progress" ]]; then
+      echo "Timed out waiting. Apple keeps processing; check with: xcrun notarytool wait $id ${auth[*]}" >&2
+    elif [[ -n "$id" ]]; then
+      echo "--- notarytool log $id" >&2
+      xcrun notarytool log "$id" "${auth[@]}" >&2 || echo "(could not fetch the log)" >&2
+    fi
+    exit 1
+  fi
+  echo "Notarization status: Accepted (submission $id)"
+
+  step "Stapling the ticket to the DMG"
+  xcrun stapler staple "$dmg"
+fi
+
+# ------------------------------------------------------------------- verify ----
+step "Verifying the DMG"
+xcrun stapler validate "$dmg" || die "no valid stapled ticket on $dmg"
+spctl -a -t open --context context:primary-signature -vv "$dmg" \
+  || die "Gatekeeper rejects the DMG"
+
+step "Verifying the app inside the DMG"
+mountpoint="$work/mnt"
+mkdir "$mountpoint"
+hdiutil attach "$dmg" -readonly -nobrowse -noautoopen -mountpoint "$mountpoint" -quiet \
+  || { mountpoint=""; die "cannot mount $dmg"; }
+app="$mountpoint/$app_name.app"
+[[ -d "$app" ]] || die "no '$app_name.app' inside $dmg"
+codesign --verify --deep --strict --verbose=2 "$app"
+assess="$(spctl -a -vv -t exec "$app" 2>&1)" || { echo "$assess" >&2; die "Gatekeeper rejects $app_name.app"; }
+echo "$assess"
+case "$assess" in
+  *"source=Notarized Developer ID"*) ;;
+  *) die "Gatekeeper accepts the app but not as Notarized Developer ID" ;;
+esac
+
+step "Done"
+echo "$dmg is notarized, stapled and accepted by Gatekeeper."
+echo "SHA256: $(shasum -a 256 "$dmg" | awk '{ print $1 }')"
