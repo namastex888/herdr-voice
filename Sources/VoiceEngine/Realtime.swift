@@ -12,6 +12,8 @@ import os
     private let host: ToolHost
     /// The voice's standing instructions, sent with every setup.
     private let instructions: String
+    /// What the voice is asked to say when a session first comes up.
+    private let greeting: String
     /// The tools offered now: the host's, or the narrower set routed for the current turn (see `setTools`).
     private var tools: ToolList
     /// What the session is doing, for a UI: both sides of the conversation, tool calls and status lines.
@@ -186,13 +188,15 @@ import os
     private var quietTimer: DispatchSourceTimer?
 
     public init(provider: Provider, key: String, voice: String, request: URLRequest? = nil,
-                host: ToolHost = HerdrToolHost(), instructions: String = voiceInstructions) {
+                host: ToolHost = HerdrToolHost(), instructions: String = voiceInstructions,
+                greeting: String = Greeting.prompt) {
         self.provider = provider
         self.key = key
         self.voice = voice
         self.requestOverride = request
         self.host = host
         self.instructions = instructions
+        self.greeting = greeting
         self.tools = host.tools
         // Local with no runtime yet: stay closed until completeProviderSwitch brings the loaded runtime's request.
         self.providerPreparing = provider == .local && request == nil
@@ -417,7 +421,7 @@ import os
         hadSession = true
         if greetNext, !(provider == .local && heardDuringHandshake) {
             greetNext = false
-            addReplyText(Greeting.prompt)
+            addReplyText(greeting)
             if replies.wantReply() { requestResponse() }
         } else if provider == .local && heardDuringHandshake {
             greetNext = false
