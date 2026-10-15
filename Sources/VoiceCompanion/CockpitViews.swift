@@ -326,6 +326,13 @@ struct CockpitDetailScreen: View {
                         .foregroundStyle(by: .value("Provider", point.provider))
                 }
                 .chartLegend(position: .bottom)
+            } else if counts {
+                Chart(days, id: \.date) { day in
+                    BarMark(x: .value("Day", day.date, unit: .day), y: .value(series.unit, series.value(day.metrics)))
+                        .foregroundStyle(theme.primary)
+                }
+                .chartYAxisLabel(series.unit)
+                .chartYScale(domain: 0...(Self.wholeTicks(days.map { series.value($0.metrics) }).last ?? 1))
             } else {
                 Chart(days, id: \.date) { day in
                     BarMark(x: .value("Day", day.date, unit: .day), y: .value(series.unit, series.value(day.metrics)))
@@ -338,7 +345,7 @@ struct CockpitDetailScreen: View {
         .chartXAxis {
             AxisMarks(values: Self.dateTicks(days.map(\.date))) { value in
                 AxisGridLine().foregroundStyle(theme.outlineVariant.opacity(0.5))
-                AxisValueLabel {
+                AxisValueLabel(anchor: .top) { // centered on its tick, under its own bar
                     if let date = value.as(Date.self) {
                         Text(date.formatted(Date.FormatStyle(locale: Locale(identifier: "en_US")).month(.abbreviated).day()))
                             .foregroundStyle(theme.onSurfaceVariant)
@@ -371,16 +378,19 @@ struct CockpitDetailScreen: View {
         .environment(\.locale, Locale(identifier: "en_US"))
     }
 
-    /// Every fourth day, ending two days before the last, so no label sits on the trailing edge.
+    /// Every fourth day at noon (the middle of its bar), ending two days before the last, so no label sits on the
+    /// trailing edge.
     static func dateTicks(_ dates: [Date]) -> [Date] {
-        guard dates.count > 2 else { return dates }
-        return stride(from: dates.count - 3, through: 0, by: -4).map { dates[$0] }.reversed()
+        let noon = dates.map { $0.addingTimeInterval(12 * 3600) }
+        guard noon.count > 2 else { return noon }
+        return stride(from: noon.count - 3, through: 0, by: -4).map { noon[$0] }.reversed()
     }
 
-    /// Whole-number gridlines for a count, about four of them.
+    /// Whole-number gridlines for a count, about four of them, the last at or above the tallest bar.
     static func wholeTicks(_ values: [Double]) -> [Double] {
-        let top = max(1, Int((values.max() ?? 0).rounded(.up)))
-        let step = max(1, Int((Double(top) / 4).rounded(.up)))
+        let tallest = max(1, Int((values.max() ?? 0).rounded(.up)))
+        let step = max(1, Int((Double(tallest) / 4).rounded(.up)))
+        let top = (tallest + step - 1) / step * step
         return stride(from: 0, through: top, by: step).map(Double.init)
     }
 

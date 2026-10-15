@@ -227,7 +227,9 @@ struct PhoneBody: View {
                 .frame(maxHeight: .infinity, alignment: .bottom)
                 .zIndex(3)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // A fixed screen: nothing inside can push it past the bezel.
+        .frame(width: PhoneWindow.phoneSize.width - PhoneWindow.bezel * 2,
+               height: PhoneWindow.phoneSize.height - PhoneWindow.bezel * 2)
         .clipShape(screen)
         .padding(PhoneWindow.bezel)
         .background(
@@ -312,10 +314,11 @@ struct StatusBar: View {
         if !c.available || c.link == .disconnected { return "Off" }
         if c.paused { return "Paused" }
         if c.muted { return "Muted" }
+        // Short words: the right-hand group must stay clear of the camera.
         return switch c.link {
         case .connected: "Live"
         case .idle: "Idle"
-        case .offline, .disconnected: "Offline"
+        case .offline, .disconnected: "Off"
         }
     }
 
@@ -532,27 +535,29 @@ struct AssistantSheet: View {
                 VStack(alignment: .leading, spacing: 8) {
                     if let you = lastLine(.you) {
                         Text(you).font(.system(size: 14)).foregroundStyle(theme.onSurfaceVariant).lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
                     }
                     Text(lastLine(.voice) ?? controller.conversationPrompt)
                         .font(.system(size: 18, weight: .regular)).foregroundStyle(theme.onSurface)
                         .lineLimit(5).fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 22)
+                .padding(.horizontal, 18)
                 .animation(.easeOut(duration: 0.2), value: chat.lines.count)
-                HStack(spacing: 8) {
+                HStack(spacing: 4) {
                     Chip(symbol: controller.handsFree ? "infinity" : "waveform", text: controller.conversationStatus)
-                        .layoutPriority(1)
+                        .fixedSize()
                     Spacer(minLength: 2)
                     RoundIcon(symbol: chat.controls.muted ? "mic.slash.fill" : "mic.fill", tinted: !chat.controls.muted,
-                              help: chat.controls.muteTitle) { controller.press(chat.controls.mutePress) }
+                              help: chat.controls.muteTitle, size: 38) { controller.press(chat.controls.mutePress) }
                         .overlay(FollowUpRing(live: live).allowsHitTesting(false))
-                    RoundIcon(symbol: "keyboard", tinted: false, help: "Type instead") { controller.phone.go(.messages) }
-                    RoundIcon(symbol: "xmark", tinted: false, help: "End the conversation (Esc)") {
+                        .padding(.horizontal, 3) // room for the countdown ring
+                    RoundIcon(symbol: "keyboard", tinted: false, help: "Type instead", size: 38) { controller.phone.go(.messages) }
+                    RoundIcon(symbol: "xmark", tinted: false, help: "End the conversation (Esc)", size: 38) {
                         controller.dismissConversation()
                     }
                 }
-                .padding(.horizontal, 14).padding(.bottom, 30)
+                .padding(.horizontal, 10).padding(.bottom, 30)
             }
             .background(UnevenRoundedRectangle(topLeadingRadius: 28, topTrailingRadius: 28, style: .continuous)
                 .fill(theme.surfaceContainerHigh))
@@ -568,6 +573,7 @@ struct RoundIcon: View {
     let symbol: String
     let tinted: Bool
     let help: String
+    var size: CGFloat = 44
     let action: () -> Void
     @Environment(\.phoneTheme) private var theme
 
@@ -575,7 +581,7 @@ struct RoundIcon: View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(tinted ? theme.onPrimary : theme.onSurface)
-                .frame(width: 44, height: 44)
+                .frame(width: size, height: size)
                 .background(Circle().fill(tinted ? theme.primary : theme.surfaceContainerHighest))
         }
         .buttonStyle(.plain)
@@ -592,7 +598,7 @@ struct FollowUpRing: View {
         if let left = live.frame.followUp {
             Circle().trim(from: 0, to: left).rotation(.degrees(-90))
                 .stroke(theme.tertiary, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                .frame(width: 52, height: 52)
+                .frame(width: 46, height: 46)
         }
     }
 }

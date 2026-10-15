@@ -116,3 +116,14 @@ func micAudioIsReadFromEachWiresFrames(_ provider: Provider) {
     let other = wire.encode(.userText("hi", expectsReply: true)) + wire.encode(.requestReply) + wire.encode(.audioPaused)
     #expect(other.compactMap(WireFrame.micAudio(in:)).isEmpty)
 }
+
+@Test func aTranscriptClosesTheUtteranceSoTheNextSpeechIsANewNote() {
+    var chat = VoiceChatAssembler()
+    // Always on, no reply in between: two utterances, each transcribed before the next.
+    chat.mic(tone(40), at: at(0))
+    chat.userText("first", at: at(1))
+    chat.mic(tone(20), at: at(2))
+    chat.userText("second", at: at(3))
+    #expect(chat.clips.map(\.text) == ["first", "second"])
+    #expect(abs(chat.clips[0].seconds - 0.04) < 0.001 && abs(chat.clips[1].seconds - 0.02) < 0.001)
+}
