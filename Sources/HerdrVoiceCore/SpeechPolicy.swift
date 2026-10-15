@@ -20,18 +20,16 @@ public struct SpeechPolicy: Sendable {
     /// PCM16 mono at 24 kHz.
     static let bytesPerSecond = 48_000.0
 
-    /// Short approval questions for run_shell read the command aloud on purpose; skip leak checks then.
-    public var allowCode = false
     private var text = ""
     private var leakFlagged = false
     private var audioBytes = 0
     private var lengthFlagged = false
 
-    public init(allowCode: Bool = false) { self.allowCode = allowCode }
+    public init() {}
 
     /// Feed each transcript delta. Returns `.leak` at most once per reply.
     public mutating func feed(_ delta: String) -> Verdict {
-        guard !leakFlagged, !allowCode else { return .ok }
+        guard !leakFlagged else { return .ok }
         text += delta
         guard let reason = Self.leak(in: text) else { return .ok }
         leakFlagged = true

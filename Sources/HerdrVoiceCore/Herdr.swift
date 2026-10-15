@@ -146,7 +146,7 @@ public enum HerdrTools {
         case "run_shell":
             guard shellEnabled else { return Outcome(output: "error: run_shell is disabled (set HERDR_VOICE_SHELL=1)", watch: nil) }
             return Outcome(output: runShell(args["command"] as? String ?? "", cwd: args["cwd"] as? String,
-                                            confirmed: confirmed, gate), watch: nil)
+                                            confirmed: confirmed, gate, userInitiated: userInitiated), watch: nil)
         case _ where paneControlTools.contains(name):
             return Outcome(output: paneControl(name, args, run, gate, userInitiated: userInitiated), watch: nil)
         case "split_pane":

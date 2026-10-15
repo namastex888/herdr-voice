@@ -68,17 +68,25 @@ public struct HerdrHarness: Harness {
     }
 }
 
-/// `run_shell`: zsh commands, each needing a spoken yes for that exact command. Off unless switched on.
+/// `run_shell`: zsh commands. Read-only checks the user asked for run at once; anything else needs a spoken yes for
+/// that exact command. Off unless switched on.
 public struct ShellHarness: Harness {
     private let enabled: Bool
+    private let gate: ConfirmGate
+    private let exec: HerdrTools.ShellExec
 
-    public init(enabled: Bool = HerdrTools.shellEnabled) {
+    public init(enabled: Bool = HerdrTools.shellEnabled, gate: ConfirmGate = .shared,
+                exec: @escaping HerdrTools.ShellExec = HerdrTools.shellExec) {
         self.enabled = enabled
+        self.gate = gate
+        self.exec = exec
     }
 
     public var id: String { "shell" }
     public var title: String { "Shell" }
-    public var summary: String { "Run a shell command in a folder, after the user's spoken yes for that exact command." }
+    public var summary: String {
+        "Run a shell command in a folder: read-only checks at once, anything that changes something after the user's yes."
+    }
     public var isAvailable: Bool { enabled }
     public var actions: ToolList { ToolList([HerdrTools.shellSchema]) }
 
@@ -86,7 +94,8 @@ public struct ShellHarness: Harness {
         guard enabled else { return HerdrTools.Outcome(output: "error: the shell is switched off", watch: nil) }
         let args = (try? JSONSerialization.jsonObject(with: Data(arguments.utf8)) as? [String: Any]) ?? [:]
         return HerdrTools.Outcome(output: HerdrTools.runShell(args["command"] as? String ?? "", cwd: args["cwd"] as? String,
-                                                              confirmed: args["confirmed"] as? Bool ?? false, .shared),
+                                                              confirmed: args["confirmed"] as? Bool ?? false, gate,
+                                                              userInitiated: userInitiated, exec: exec),
                                   watch: nil)
     }
 }

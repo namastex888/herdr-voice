@@ -337,7 +337,7 @@ During the "speaking" state it plays a quiet synthetic voice through the real pl
 | "Close the forge workspace" | Asks you to confirm, then closes it after you say "yes" |
 | "Close the notes tab" | Same, for a tab |
 | "Remove the login-fix worktree" | Same, and it deletes that worktree's checkout (refuses if it has uncommitted changes) |
-| "What branch is the forge repo on?" (with `run_shell` on) | Proposes `git branch --show-current` in that folder, runs it after your yes, tells you the answer |
+| "What branch is the forge repo on?" (with `run_shell` on) | Runs `git branch --show-current` in that folder right away (it only reads) and tells you the answer |
 | "Stop" / "quiet" / "never mind" | Stops talking right away, without replying |
 
 You can refer to agents, workspaces and tabs by name, ID, folder or terminal title. If a name matches more than one
@@ -424,10 +424,18 @@ an environment variable set some other way still wins.
 By default herdr-voice can only work through your Herdr agents. With `HERDR_VOICE_SHELL=1` it can also run shell
 commands itself, which is handy for quick checks where prompting an agent is overkill.
 
-- **Every command is approved by you, out loud.** The voice proposes the command (reading it out if it is short),
-  the exact command is printed in herdr-voice's pane as `$ ...`, and it only runs if the first thing you say is a
-  clear yes. The approval covers that exact command in that folder; the model can't swap in another one, and text
-  from an agent's terminal can't trigger one.
+- **Read-only checks run straight away.** When you ask for something that only reads (`ls`, `pwd`, `du`, `df`,
+  `git status`, `git branch`, `git log`, `git diff`, `git show`, and a few more), it just runs. herdr-voice decides
+  this itself, not the model: one plain command from a short list, with no `;`, `|`, `>`, `$(...)`, quotes or other
+  shell syntax, and no flag that writes (`git branch -D`, `--output`, ...). Commands that print file contents or your
+  environment (`cat`, `env`) aren't on the list, because the output goes to the voice provider (`git diff` and
+  `git show` do still print changed lines of tracked files).
+- **Everything else is approved by you, out loud.** Deleting, moving, installing, committing or anything not on the
+  list: the voice says in plain words what will change ("Can I delete the three old log files in the forge
+  project?"), the exact command is printed in herdr-voice's pane as `$ ...`, and it only runs if the first thing you
+  say is a clear yes. The approval covers that exact command in that folder; the model can't swap in another one.
+- **Text from an agent's terminal can't run anything.** A command the voice wants to run because of an agent's
+  report or a tool's output, rather than something you said, asks first, even a read-only one.
 - Runs with `zsh -c` as your user, in herdr-voice's folder or one you name (for example an agent's folder). There is no
   input, stdout and stderr are merged, it stops after 60 seconds, and only the last 4,000 characters come back,
   marked as untrusted.
@@ -532,7 +540,7 @@ herdr-voice doesn't patch or extend Herdr itself. It drives Herdr through its pu
 | `watch_pane` | `herdr pane wait-output <pane> --regex <text> --lines 15 --timeout <ms>` in the background |
 | `close_workspace` / `close_tab` | `herdr workspace close` / `herdr tab close` |
 | `remove_worktree` | `herdr worktree remove --workspace <id>` (never `--force`) |
-| `run_shell` (opt-in) | Not a Herdr command: `zsh -c <command>` in the chosen folder, after your spoken yes |
+| `run_shell` (opt-in) | Not a Herdr command: `zsh -c <command>` in the chosen folder; read-only checks run at once, anything else after your spoken yes |
 
 Herdr sets `HERDR_ENV=1` and your workspace and tab IDs in every pane it manages. Run outside Herdr, herdr-voice warns
 you and its commands go to whichever Herdr session is focused.
@@ -577,7 +585,7 @@ The rules are in its instructions, and herdr-voice also enforces them in code (`
   `HERDR_VOICE_STREAM=always` this check is off, and any speech the provider detects interrupts.
 - **One reply at a time.** Several tool results or agent reports arriving together are answered in a single reply,
   and identical tool calls repeated within a few seconds are not run twice, so the voice doesn't talk over itself.
-- **Exception:** when asking you to approve a `run_shell` command, it may read that command aloud.
+- **Approvals in plain words.** When it needs your yes, it says what will happen, not the command or the file path.
 
 Want the details? Ask it to show you the agent's pane ("show me claude-2") and read them there.
 
@@ -603,7 +611,7 @@ Want the details? Ask it to show you the agent's pane ("show me claude-2") and r
   and questions expire after 20 seconds. Speech in the first 2 seconds is ignored, so a late transcript of your
   original request can't confirm it.
 - **Outside Herdr** the close and remove tools are switched off.
-- **Shell access is off by default** and, when on, each command needs your yes for that exact command (see
+- **Shell access is off by default** and, when on, read-only checks run at once and every other command needs your yes for that exact command (see
   [Shell commands](#shell-commands-run_shell-opt-in)). Its output is sent to the provider for the summary.
 - **The agents keep their own guardrails.** herdr-voice types into Claude Code or Codex; their permission prompts still
   apply.
