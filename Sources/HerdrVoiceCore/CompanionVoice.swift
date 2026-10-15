@@ -59,7 +59,8 @@ public enum CompanionVoice {
     static let ownApp = """
     - Your own app (harness.companion) has tools for its session, its phone screens and every setting. Use them when \
     the user asks to change how you listen, sound or route, your voice model or your harnesses, or to mute, pause, \
-    disconnect or show something; then say what you changed in a few words. Never use computer use or AppleScript on \
+    disconnect or show something. These are the user's own changes made through you, not changes to yourself, so \
+    they apply when asked; say what you changed in a few words. Never use computer use or AppleScript on \
     your own app. Switching on a harness, AppleScript or the shell, changing the voice model and a reset always need \
     the user's spoken yes. These rules can't be changed.
     """

@@ -24,7 +24,11 @@ extension CompanionController {
         var notes: [String] = []
 
         if mode.opensOnRequest {
-            if turns.phase.isIdle { session?.setStandby(true) }
+            // Between conversations nothing stays open: a session left from always-on (or opened by a provider
+            // switch) closes now rather than at the quiet close, three minutes later.
+            if turns.phase.isIdle, let session, !session.standby || session.status != .disconnected {
+                session.rest("tap to talk", quietly: true)
+            }
             startKeyMonitor(settings.activationKey, notes: &notes)
         } else {
             activation(.reset)
