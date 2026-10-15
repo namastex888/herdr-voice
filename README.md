@@ -27,6 +27,27 @@ voice: Sending that to claude-2 now.
 voice: Done. 42 tests pass; it fixed a null check in the login handler.
 ```
 
+## Voice Companion (standalone app)
+
+This fork also builds **Voice Companion**, a menu bar app that doesn't need Herdr: a floating chat and orb that
+controls your Mac by voice or text, and grows one skill at a time. Herdr becomes one of the things it can drive.
+
+- **Harnesses** are what it can control: the Mac (apps, links, files, volume, dark mode, clipboard, notifications,
+  Shortcuts, battery, display sleep; AppleScript and shell commands if you switch them on), and Herdr when it's
+  installed. None of them needs Accessibility permission.
+- **Skills** are slices of a harness ("Apps and files", "Mac settings", "Coding agents"…). Teach new ones out loud:
+  "learn a skill called start my day that opens Mail and Calendar and sets the volume to 30". After your spoken yes it
+  is saved as JSON in `~/Library/Application Support/Voice Companion/skills` and runs whenever you say its name.
+- **Routing**: every turn, spoken or typed, goes to [Jev](https://docs.typesafe.ai/models) (`jev-1.14.0`) while the
+  voice answers. The skill it picks gets its tools loaded for the next steps (OpenAI and Grok swap tools mid-session).
+  Without a Jev key it routes by matching words, and the voice can always load a skill itself.
+- The **Skills** tab maps every harness action and every learned skill; **Settings** stores keys in your Keychain
+  (it can reuse MeetingPulse's Jev key). Risky actions keep herdr-voice's rule: only your own yes confirms them.
+
+Build, sign and notarize: `scripts/companion-build-dmg`, then `scripts/companion-notarize` (see
+[Packaging/VoiceCompanion/README.md](Packaging/VoiceCompanion/README.md)). `VoiceCompanion --self-test` checks a build
+without a microphone, network or key.
+
 ## Features
 
 - **Hands-free voice chat.** The mic stays open, with macOS echo cancellation so it works on speakers too. Talk
