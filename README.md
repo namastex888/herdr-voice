@@ -70,7 +70,7 @@ voice: Done. 42 tests pass; it fixed a null check in the login handler.
 | | |
 |---|---|
 | macOS | 14 Sonoma or later (developed on macOS 26) |
-| Swift | 5.10 or later: Xcode, or the Xcode Command Line Tools (`xcode-select --install`) |
+| Swift | 6.2 or later: Xcode 26 or later, or a swift.org toolchain (`swiftly install latest`) |
 | Herdr | 0.9.0 or later |
 | Provider | Local OpenLive with WebGPU and Ollama, or an xAI, OpenAI, or Google API key |
 
@@ -576,7 +576,7 @@ Want the details? Ask it to show you the agent's pane ("show me claude-2") and r
 
 ```bash
 swift build          # debug build
-swift test           # 190 tests: local mode (wire, state directory, warm-up, relaunch, menu), plugin config and single-instance lock, starting agents, pane reading and watching, workspace/tab/worktree management, key setup, events, wire protocols (golden OpenAI/Grok messages, Gemini Live), Herdr tools, focus, confirmations, injection gates, shell, speech policy, activity, window pinning, reconnect, keychain, speech gate, reply scheduling, report condensing, stop phrases, model menu
+swift test --no-parallel   # 190 tests, about 3 s (parallel runs can freeze, see ci.yml): local mode (wire, state directory, warm-up, relaunch, menu), plugin config and single-instance lock, starting agents, pane reading and watching, workspace/tab/worktree management, key setup, events, wire protocols (golden OpenAI/Grok messages, Gemini Live), Herdr tools, focus, confirmations, injection gates, shell, speech policy, activity, window pinning, reconnect, keychain, speech gate, reply scheduling, report condensing, stop phrases, model menu
 swift build -c release
 herdr plugin link "$PWD"   # try your working copy as the plugin (link doesn't build: run swift build -c release first)
 ```

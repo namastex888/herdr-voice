@@ -1,6 +1,6 @@
 /// Main-queue generation check for asynchronous Local OpenLive startup.
 /// A ready result can activate only if the user has not made a later provider choice.
-public struct LocalActivation {
+public struct LocalActivation: Sendable {
     private var generation = 0
     /// A load is running that can still activate: the orb shows it as working, not offline.
     public private(set) var loading = false

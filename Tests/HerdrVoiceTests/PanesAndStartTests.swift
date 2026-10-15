@@ -14,8 +14,8 @@ private let snapshot = #"""
 """#
 
 /// Fake herdr: answers reads and lists, replies to creates like herdr, and records every command.
-private final class FakeHerdr {
-    var ran: [[String]] = []
+private final class FakeHerdr: @unchecked Sendable { // configured before use; `ran` is thread-safe
+    let ran = Recorder<[String]>()
     var startReply = #"{"result":{"type":"agent_started"}}"#
     var agents = #"{"result":{"agents":[{"name":"claude-fix-login","pane_id":"w9:p1"}]}}"#
     func run(_ args: [String]) -> String {
@@ -79,14 +79,14 @@ func panesResolve(query: String, id: String) {
 
 @Test func watchWaitsAtTheBottomOfThePaneAndReportsEachOutcome() {
     let w = HerdrTools.PaneWatch(pane: "w1:p2", label: "npm run build", awaited: "\"done\"", regex: "(?i)done", timeoutMs: 60_000)
-    var ran: [String] = []
-    var report = ""
+    let ran = Recorder<[String]>()
+    let report = Recorder<String>()
     HerdrTools.watchPane(w, runAsync: { args, done in
-        ran = args
+        ran.append(args)
         done(#"{"result":{"matched_line":"Build done","read":{"text":"compiling\nBuild done"}}}"#)
-    }) { report = $0 }
-    #expect(ran == ["pane", "wait-output", "w1:p2", "--regex", "(?i)done", "--lines", "15", "--timeout", "60000"])
-    #expect(report.hasPrefix("Pane npm run build already shows \"done\"") && report.contains("UNTRUSTED"))
+    }) { report.append($0) }
+    #expect(ran == [["pane", "wait-output", "w1:p2", "--regex", "(?i)done", "--lines", "15", "--timeout", "60000"]])
+    #expect(report.last?.hasPrefix("Pane npm run build already shows \"done\"") == true && report.last?.contains("UNTRUSTED") == true)
     #expect(HerdrTools.watchReport(w, #"{"result":{"matched_line":"done"}}"#, elapsed: 30).contains("now shows"))
     #expect(HerdrTools.watchReport(w, #"{"error":{"code":"timeout"}}"#, elapsed: 60).contains("did not show \"done\" within 1 minutes"))
     #expect(HerdrTools.watchReport(w, #"{"error":{"code":"x","message":"pane w1:p2 not found"}}"#, elapsed: 1).contains("not found"))

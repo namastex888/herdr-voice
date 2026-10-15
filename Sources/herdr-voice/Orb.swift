@@ -6,7 +6,7 @@ import QuartzCore
 /// falls back to the bottom-left corner of the active screen, above full-screen apps and on every Space.
 /// Inside, soft colour blobs drift on out-of-phase paths. Two voices drive it differently:
 /// the developer's mic pushes the blobs and glow outward, the assistant's speech glows from the core.
-final class Orb {
+@MainActor final class Orb {
     typealias Mood = HerdrVoiceCore.Mood
 
     /// Per-blob motion: two incommensurate frequencies per axis, so paths never visibly repeat.
@@ -242,7 +242,9 @@ final class Orb {
     /// hidden, which AppKit does for us (measured: 62/s visible, 32/s at the idle rate, 0/s ordered out).
     func run(_ frame: @escaping () -> Frame) {
         // A timer, not the display link: the link stops while the panel is hidden, which is exactly when this matters.
-        let watchdog = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.reassert() }
+        let watchdog = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reassert() } // added to the main run loop below
+        }
         RunLoop.main.add(watchdog, forMode: .common)
         driver.fire = { [weak self] in
             guard let self, self.panel.isVisible else { return }
@@ -379,13 +381,13 @@ final class Orb {
 }
 
 /// Display links need an Objective-C target; this forwards each frame to a closure.
-private final class FrameDriver: NSObject {
+@MainActor private final class FrameDriver: NSObject {
     var fire: () -> Void = {}
     @objc func step(_ link: CADisplayLink) { fire() }
 }
 
 /// Lets a menu item carry a Swift closure.
-private final class ActionBox: NSObject {
+@MainActor private final class ActionBox: NSObject {
     let run: () -> Void
     init(_ run: @escaping () -> Void) { self.run = run }
 }

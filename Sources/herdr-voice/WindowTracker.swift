@@ -10,7 +10,8 @@ import HerdrVoiceCore
 /// - when that app isn't the Herdr terminal, the orb hides without querying any windows (the common case);
 /// - otherwise only on-screen windows are listed (~57 here), and only the terminal's are decoded;
 /// - the full window list (~395 here, including every off-screen window) and the process scan run every 2 s.
-final class WindowTracker {
+/// `start` runs on main; the timer and its state on `queue`; the front app's pid crosses them under `front`.
+final class WindowTracker: @unchecked Sendable {
     typealias Result = (hasHost: Bool, frame: CGRect?)
 
     private let queue = DispatchQueue(label: "herdr-voice.window-tracker", qos: .utility)
@@ -30,7 +31,7 @@ final class WindowTracker {
     private var frontPID: Int32?
 
     /// `onChange` runs on main, only when the result changes. The frame is in AppKit screen coordinates.
-    func start(onChange: @escaping (_ hasHost: Bool, _ frame: NSRect?) -> Void) {
+    func start(onChange: @escaping @MainActor (_ hasHost: Bool, _ frame: NSRect?) -> Void) {
         // herdr-voice itself never counts as "in front" (it can be activated briefly at launch).
         let own = getpid()
         if let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier, pid != own { setFront(pid) }
@@ -110,7 +111,7 @@ final class WindowTracker {
     private static func processName(_ pid: Int32) -> String {
         var buf = [CChar](repeating: 0, count: 256)
         proc_name(pid, &buf, UInt32(buf.count))
-        return String(cString: buf)
+        return String(decoding: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     /// Windows of `pids`, front to back. Reads the owner first and skips everyone else's windows, so the cost of

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Opt-in `run_shell` tool. Off unless HERDR_VOICE_SHELL=1, and every command needs the developer's spoken
 /// yes bound to that exact command and directory, so neither the model nor injected terminal text can run one.
@@ -7,7 +8,7 @@ extension HerdrTools {
     public static let shellTimeout: TimeInterval = 60
     static let shellOutputLimit = 4000
 
-    static let shellSchema = fn(
+    nonisolated(unsafe) static let shellSchema = fn(
         "run_shell",
         "Run a short shell command (zsh, no input, 60 s limit) and get its exit code and output. For quick checks the "
             + "developer asks for; send real coding work to an agent with prompt_agent instead. Always two calls: call "
@@ -17,13 +18,13 @@ extension HerdrTools {
          "confirmed": confirmedField],
         ["command"])
 
-    public struct ShellResult: Equatable {
+    public struct ShellResult: Equatable, Sendable {
         public let status: Int32
         public let output: String
         public let timedOut: Bool
     }
 
-    public typealias ShellExec = (_ command: String, _ cwd: String, _ timeout: TimeInterval) -> ShellResult
+    public typealias ShellExec = @Sendable (_ command: String, _ cwd: String, _ timeout: TimeInterval) -> ShellResult
 
     static func runShell(_ command: String, cwd: String?, confirmed: Bool, _ gate: ConfirmGate,
                          exec: ShellExec = shellExec) -> String {
@@ -60,12 +61,11 @@ extension HerdrTools {
 
         // Drain concurrently so a chatty command can't block on a full pipe; keep a bounded tail. A dedicated
         // thread, not the GCD pool: with its threads blocked (parallel tests) the drain started too late to count.
-        let lock = NSLock()
-        var tail = Data()
+        let tail = OSAllocatedUnfairLock(initialState: Data())
         let drained = DispatchSemaphore(value: 0)
         Thread {
             while case let chunk = pipe.fileHandleForReading.availableData, !chunk.isEmpty {
-                lock.withLock {
+                tail.withLock { tail in
                     tail.append(chunk)
                     if tail.count > 64_000 { tail.removeFirst(tail.count - 64_000) }
                 }
@@ -82,7 +82,7 @@ extension HerdrTools {
         // ponytail: only zsh is signalled; background children it spawned keep the pipe open and outlive us.
         // Spawn in its own process group (posix_spawn) if that ever matters.
         _ = drained.wait(timeout: .now() + 2)
-        let text = lock.withLock { String(decoding: tail, as: UTF8.self) }
+        let text = tail.withLock { String(decoding: $0, as: UTF8.self) }
         return ShellResult(status: p.isRunning ? -1 : p.terminationStatus,
                            output: String(text.suffix(shellOutputLimit)), timedOut: timedOut)
     }

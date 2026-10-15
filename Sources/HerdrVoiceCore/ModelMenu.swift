@@ -1,7 +1,7 @@
 /// The AI-model entries of the orb's right-click menu: every provider in menu order, the current one checked,
 /// ones without an API key (or Local OpenLive before it's set up) shown but disabled (so it's clear why they can't be picked).
 public enum ModelMenu {
-    public struct Entry: Equatable {
+    public struct Entry: Equatable, Sendable {
         public let provider: Provider
         public let title: String
         public let checked: Bool

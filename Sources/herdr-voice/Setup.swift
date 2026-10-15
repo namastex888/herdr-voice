@@ -15,8 +15,8 @@ func setupKey(for provider: Provider) -> Bool {
         print("✖ couldn't read from the terminal; run this in an interactive terminal")
         return false
     }
-    let raw = String(cString: buffer)
-    buffer.withUnsafeMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 0) } // don't leave the key around
+    let raw = String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    _ = buffer.withUnsafeMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 0) } // don't leave the key around
     guard let key = Keychain.cleanKey(raw) else {
         print("✖ that doesn't look like an API key (empty, or it has spaces or other characters keys don't use); nothing saved")
         return false

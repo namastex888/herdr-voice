@@ -12,7 +12,8 @@ import Foundation
 /// - One `toolCall` carries every parallel call; one `toolResponse` answers them all.
 /// - Sessions resume from a handle with their context (`sessionResumptionUpdate`), and `goAway` warns before the
 ///   connection closes (connections last about 10 minutes; context compression makes sessions unlimited).
-public final class GeminiLiveWire: Wire {
+/// `decode` state is touched only by the session's receive path (main); `encode` is stateless, so the mic queue may call it.
+public final class GeminiLiveWire: Wire, @unchecked Sendable {
     public static let endpoint =
         "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
     /// Google's recommended Live model (stable). The 2.5 native-audio preview it replaces is closed to new users; an

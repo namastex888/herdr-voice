@@ -5,7 +5,7 @@ import os
 /// The real-time side must never allocate or wait, so storage is preallocated and the writer only *tries* the
 /// lock: if the reader holds it (a memcpy of one 20 ms chunk), that ~10 ms block is dropped and counted rather than
 /// stalling audio I/O. os_unfair_lock is used because Swift atomics need macOS 15 and this package targets 14.
-public final class MicRing {
+public final class MicRing: @unchecked Sendable { // every access to the buffer holds `lock`
     public let capacity: Int
     private let storage: UnsafeMutablePointer<Float>
     private let lock: UnsafeMutablePointer<os_unfair_lock>

@@ -3,15 +3,16 @@ import HerdrVoiceCore
 import os
 
 /// One realtime voice session: streams mic audio up, plays assistant audio, runs Herdr tools.
-/// All state is touched on the main queue except `sendRaw`, which URLSessionWebSocketTask allows from any thread.
-final class Realtime {
+/// Main-actor state, except the mic path (`micChunk`), which runs on the mic queue every 20 ms. It reaches only
+/// `micShared`, `micLocal`, `audio` and constants, and streams through the socket `micShared` holds for it.
+@MainActor final class Realtime {
     enum Status { case connecting, live, disconnected }
 
     private(set) var provider: Provider
     private var key: String
     private var voice: String
     private var requestOverride: URLRequest?
-    let audio = Audio()
+    nonisolated let audio = Audio()
     private var socket: URLSessionWebSocketTask?
     /// The provider's wire protocol for the current connection (see Wire). Replaced on every connect.
     private var wire: Wire
@@ -97,21 +98,49 @@ final class Realtime {
     // Speech-gated streaming. Providers bill per minute of audio, and an always-open mic streams every unmuted
     // minute. Only speech is sent (SpeechGate), and a quiet session is closed and reopened when you next speak.
     // HERDR_VOICE_STREAM=always restores continuous streaming.
-    private let gated = ProcessInfo.processInfo.environment["HERDR_VOICE_STREAM"] != "always"
+    private nonisolated let gated = ProcessInfo.processInfo.environment["HERDR_VOICE_STREAM"] != "always"
     /// A session with no speech for this long, and nothing speaking or running, is closed until you speak.
-    static let quietClose: TimeInterval = 180
+    nonisolated static let quietClose: TimeInterval = 180
     /// How recent the mic's own loud onset must be for the provider's "speech started" to cut the voice off.
-    static let bargeInWindow: TimeInterval = 1.5
-    /// Mic-queue only. HERDR_VOICE_GATE_THRESHOLD pins the opening level for unusual hardware.
-    private var gate = SpeechGate<String>(
-        overrideThreshold: ProcessInfo.processInfo.environment["HERDR_VOICE_GATE_THRESHOLD"].flatMap(Float.init))
+    nonisolated static let bargeInWindow: TimeInterval = 1.5
     /// HERDR_VOICE_GATE_DEBUG=1: log gate openings/closings and a level meter every 5 s, to tune any mic.
-    private let gateDebug = ProcessInfo.processInfo.environment["HERDR_VOICE_GATE_DEBUG"] == "1"
-    private let echoRatio = EchoGuard.ratio(environment: ProcessInfo.processInfo.environment)
-    /// Mic queue only.
-    private var echoReference: Float = 0
-    private var meterPeak: Float = 0
-    private var meterChunks = 0
+    private nonisolated let gateDebug = ProcessInfo.processInfo.environment["HERDR_VOICE_GATE_DEBUG"] == "1"
+    private nonisolated let echoRatio = EchoGuard.ratio(environment: ProcessInfo.processInfo.environment)
+    /// The mic queue's own state: the speech gate and the echo and meter bookkeeping around it. Only the mic queue
+    /// (and init) touch it, so its lock is never contended.
+    private struct MicLocal {
+        /// HERDR_VOICE_GATE_THRESHOLD pins the opening level for unusual hardware.
+        var gate = SpeechGate<String>(
+            overrideThreshold: ProcessInfo.processInfo.environment["HERDR_VOICE_GATE_THRESHOLD"].flatMap(Float.init))
+        var echoReference: Float = 0
+        var meterPeak: Float = 0
+        var meterChunks = 0
+
+        /// What the gate sees, so any mic can be checked and tuned. Returns the lines to log.
+        mutating func meter(level: Float, playback: Float, opened: Bool, closed: Bool) -> [String] {
+            let floor = gate.noiseFloor, open = gate.openThreshold
+            var lines: [String] = []
+            if opened || closed {
+                lines.append(String(format: "🎚  gate %@  level %.4f  floor %.4f  open at %.4f  playback %.4f",
+                                    opened ? "OPEN " : "close", level, floor, open, playback))
+            }
+            meterPeak = max(meterPeak, level)
+            meterChunks += 1
+            guard meterChunks >= 250 else { return lines } // every 5 s
+            lines.append(String(format: "🎚  floor %.4f  open at %.4f  peak %.4f (last 5 s)", floor, open, meterPeak))
+            meterPeak = 0
+            meterChunks = 0
+            return lines
+        }
+    }
+    private nonisolated let micLocal = OSAllocatedUnfairLock(initialState: MicLocal())
+    /// Where the mic queue streams to: the current connection's wire and socket, read together under `micShared`.
+    private struct MicLink {
+        let wire: Wire
+        let socket: URLSessionWebSocketTask?
+        let connection: Int
+        let local: Bool
+    }
     /// Shared between the mic queue and main.
     private struct MicShared {
         var muted = false
@@ -122,12 +151,17 @@ final class Realtime {
         var lastSpeech = Date()
         /// Speech captured while the session was closed or reopening, sent once it's up (at most 10 s).
         var held = HeldMicAudio()
-        /// The current connection's wire, for encoding audio on the mic queue.
+        /// The current connection's wire and socket, for streaming audio from the mic queue. Main replaces the
+        /// socket on every connect, so the mic queue must never read the session's own `socket`.
         var wire: Wire?
+        var socket: URLSessionWebSocketTask?
+        var connection = 0
         /// The last time the mic heard a speech-loud chunk (above the gate's opening level).
         var lastLoud = Date.distantPast
+
+        var link: MicLink? { wire.map { MicLink(wire: $0, socket: socket, connection: connection, local: local) } }
     }
-    private let micShared = OSAllocatedUnfairLock(initialState: MicShared())
+    private nonisolated let micShared = OSAllocatedUnfairLock(initialState: MicShared())
     /// Closed on purpose because nobody was talking; any speech (or an agent report) reopens it.
     private(set) var dormant = false
     /// A reconnect is already scheduled by the backoff.
@@ -148,7 +182,8 @@ final class Realtime {
         // Local with no runtime yet: stay closed until completeProviderSwitch brings the loaded runtime's request.
         self.providerPreparing = provider == .local && request == nil
         self.wire = provider.makeWire()
-        gate.policy = provider == .local ? .local : .cloud
+        let policy: SpeechGate<String>.Policy = provider == .local ? .local : .cloud
+        micLocal.withLock { $0.gate.policy = policy }
         micShared.withLock { $0.local = provider == .local }
         audio.onMic = { [weak self] b64, level in self?.micChunk(b64, level: level) }
     }
@@ -159,54 +194,76 @@ final class Realtime {
         if gated { startQuietTimer() }
     }
 
+    /// What the gate made of one mic chunk.
+    private struct GateStep {
+        var chunks: [String] = []
+        var useGate = false
+        var opened = false
+        var closed = false
+        /// Speech-loud: above the gate's opening level before this chunk moved it.
+        var loud = false
+        var meterLines: [String] = []
+    }
+
     /// On the mic queue, every 20 ms.
-    private func micChunk(_ b64: String, level: Float) {
+    private nonisolated func micChunk(_ b64: String, level: Float) {
         let (muted, midTurn, local) = micShared.withLock { ($0.muted, $0.midTurn, $0.local) }
-        let wantedPolicy: SpeechGate<String>.Policy = local ? .local : .cloud
-        if gate.policy != wantedPolicy {
-            gate.policy = wantedPolicy
-            gate.reset()
+        let playback = audio.outLevel
+        let gated = gated, gateDebug = gateDebug, echoRatio = echoRatio
+        let gateStep = micLocal.withLock { m -> GateStep? in
+            let wantedPolicy: SpeechGate<String>.Policy = local ? .local : .cloud
+            if m.gate.policy != wantedPolicy {
+                m.gate.policy = wantedPolicy
+                m.gate.reset()
+            }
+            if muted {
+                m.gate.reset()
+                return nil
+            }
+            var step = GateStep()
+            let wasOpen = m.gate.isOpen
+            m.echoReference = EchoGuard.reference(previous: m.echoReference, playback: playback)
+            let gateLevel = local ? EchoGuard.level(level, playback: m.echoReference, floor: m.gate.noiseFloor, ratio: echoRatio) : level
+            step.loud = gated && gateLevel > m.gate.openThreshold
+            step.useGate = gated || local
+            step.chunks = step.useGate ? m.gate.process(b64, level: gateLevel, holdOpen: local ? false : midTurn) : [b64]
+            step.opened = m.gate.isOpen && !wasOpen
+            step.closed = wasOpen && !m.gate.isOpen
+            if gateDebug && step.useGate {
+                step.meterLines = m.meter(level: level, playback: playback, opened: step.opened, closed: step.closed)
+            }
+            return step
         }
-        if muted {
-            gate.reset()
-            return
-        }
-        let wasOpen = gate.isOpen
-        let rawLevel = level
-        echoReference = EchoGuard.reference(previous: echoReference, playback: audio.outLevel)
-        let level = local ? EchoGuard.level(level, playback: echoReference, floor: gate.noiseFloor, ratio: echoRatio) : level
-        if gated && level > gate.openThreshold { micShared.withLock { $0.lastLoud = Date() } }
-        let useGate = gated || local
-        let chunks = useGate ? gate.process(b64, level: level, holdOpen: local ? false : midTurn) : [b64]
-        let opened = gate.isOpen && !wasOpen
-        let closed = wasOpen && !gate.isOpen
-        if gateDebug && useGate { debugMeter(level: rawLevel, opened: opened, closed: closed) }
+        guard let gateStep else { return }
+        for line in gateStep.meterLines { DispatchQueue.main.async { log(line) } }
+        if gateStep.loud { micShared.withLock { $0.lastLoud = Date() } }
+        let chunks = gateStep.chunks, useGate = gateStep.useGate, opened = gateStep.opened, closed = gateStep.closed
         guard !chunks.isEmpty else { return }
-        let stream = { [weak self] (wire: Wire, local: Bool) in
+        let stream = { [weak self] (link: MicLink) in
             guard let self else { return }
             if useGate { self.micShared.withLock { $0.lastSpeech = Date() } }
-            if local && opened {
-                wire.encode(.inputStarted(utteranceID: UUID().uuidString)).forEach(self.sendRaw)
+            let send = { (command: WireCommand) in
+                if let socket = link.socket { self.transmit(link.wire.encode(command), on: socket, connection: link.connection) }
+            }
+            if link.local && opened {
+                send(.inputStarted(utteranceID: UUID().uuidString))
                 DispatchQueue.main.async { self.handle(.speechStarted) }
             }
-            chunks.forEach { chunk in wire.encode(.appendAudio(chunk)).forEach(self.sendRaw) }
+            chunks.forEach { send(.appendAudio($0)) }
             // The gate just closed: tell the provider the stream paused (Gemini ends the turn on it).
             if closed {
-                wire.encode(.audioPaused).forEach(self.sendRaw)
-                if local { DispatchQueue.main.async { self.handle(.speechStopped) } }
+                send(.audioPaused)
+                if link.local { DispatchQueue.main.async { self.handle(.speechStopped) } }
             }
         }
-        let active = micShared.withLock { state in
-            (wire: state.mayStream ? state.wire : nil, local: state.local)
-        }
-        if let wire = active.wire {
-            stream(wire, active.local)
+        if let link = micShared.withLock({ $0.mayStream ? $0.link : nil }) {
+            stream(link)
             return
         }
         // No session right now (closed while quiet, warming, or reconnecting): retain at most ten seconds.
-        let held = micShared.withLock { state -> (wire: Wire?, local: Bool) in
+        let held = micShared.withLock { state -> (link: MicLink?, local: Bool) in
             if state.mayStream {
-                return (state.wire, state.local)
+                return (state.link, state.local)
             }
             if state.local {
                 state.held.appendLocal(chunks, opened: opened, closed: closed, utteranceID: UUID().uuidString)
@@ -216,30 +273,13 @@ final class Realtime {
             state.lastSpeech = Date()
             return (nil, state.local)
         }
-        if let wire = held.wire {
-            stream(wire, held.local)
+        if let link = held.link {
+            stream(link)
             return
         }
         if held.local && opened { DispatchQueue.main.async { self.handle(.speechStarted) } }
         if held.local && closed { DispatchQueue.main.async { self.handle(.speechStopped) } }
         DispatchQueue.main.async { self.wake() }
-    }
-
-    /// On the mic queue: what the gate sees, so any mic can be checked and tuned.
-    private func debugMeter(level: Float, opened: Bool, closed: Bool) {
-        let floor = gate.noiseFloor, open = gate.openThreshold
-        if opened || closed {
-            let line = String(format: "🎚  gate %@  level %.4f  floor %.4f  open at %.4f  playback %.4f",
-                              opened ? "OPEN " : "close", level, floor, open, audio.outLevel)
-            DispatchQueue.main.async { log(line) }
-        }
-        meterPeak = max(meterPeak, level)
-        meterChunks += 1
-        guard meterChunks >= 250 else { return } // every 5 s
-        let line = String(format: "🎚  floor %.4f  open at %.4f  peak %.4f (last 5 s)", floor, open, meterPeak)
-        meterPeak = 0
-        meterChunks = 0
-        DispatchQueue.main.async { log(line) }
     }
 
     /// Speech while there's no session. Reopens a session that was closed on purpose (quiet), or tries once more
@@ -256,16 +296,19 @@ final class Realtime {
     }
 
     private func activateHeldAudio() -> Bool {
-        micShared.withLock { s in
+        let wire = wire, socket = socket, connection = connection, live = status == .live
+        return micShared.withLock { s in
             let held = s.held.drain()
             let hadAudio = held.utteranceID != nil || !held.chunks.isEmpty
+            var frames: [[String: Any]] = []
             if let id = held.utteranceID {
-                wire.encode(.inputStarted(utteranceID: id)).forEach(sendRaw)
+                frames += wire.encode(.inputStarted(utteranceID: id))
             }
-            held.chunks.forEach { wire.encode(.appendAudio($0)).forEach(sendRaw) }
-            if held.closed { wire.encode(.audioPaused).forEach(sendRaw) }
-            // Enabling live streaming under the same lock keeps new mic packets behind this backlog.
-            s.mayStream = !s.muted && status == .live
+            held.chunks.forEach { frames += wire.encode(.appendAudio($0)) }
+            if held.closed { frames += wire.encode(.audioPaused) }
+            // Sending the backlog and enabling live streaming under the same lock keeps new mic packets behind it.
+            if let socket { self.transmit(frames, on: socket, connection: connection) }
+            s.mayStream = !s.muted && live
             return hadAudio
         }
     }
@@ -318,13 +361,17 @@ final class Realtime {
         closeReason = nil
         status = .connecting
         wire = provider.makeWire()
-        let newWire = wire
-        micShared.withLock { $0.wire = newWire }
         pendingOutputs.removeAll()
         pendingTexts.removeAll()
         renewWhenIdle = false
         let task = URLSession.shared.webSocketTask(with: requestOverride ?? provider.request(key: key))
         socket = task
+        let newWire = wire, id = connection
+        micShared.withLock {
+            $0.wire = newWire
+            $0.socket = task
+            $0.connection = id
+        }
         task.resume()
         let handle = wire.capabilities.nativeResumption ? resumeHandle : nil
         resumedWithContext = handle != nil
@@ -716,6 +763,7 @@ final class Realtime {
             $0.local = newProvider == .local
             $0.midTurn = false
             $0.wire = nil
+            $0.socket = nil
             $0.held.reset()
         }
         resumeHandle = nil // resumption handles only mean something to the provider that issued them
@@ -890,15 +938,23 @@ final class Realtime {
     }
 
     private func sendRaw(_ obj: [String: Any]) {
-        guard let socket, let data = try? JSONSerialization.data(withJSONObject: obj) else { return }
-        let id = connection
-        socket.send(.string(String(decoding: data, as: UTF8.self))) { [weak self] err in
-            guard let err else { return }
-            DispatchQueue.main.async {
-                // Failures on a socket that never came up, or has since been replaced, are already reported by
-                // the reconnect logic; only a live session's send errors are news.
-                guard let self, self.connection == id, self.established else { return }
-                log("✖ send: \(err.localizedDescription)")
+        guard let socket else { return }
+        transmit([obj], on: socket, connection: connection)
+    }
+
+    /// Sends frames on `socket`, which belongs to `connection`. Nonisolated so the mic queue can stream with the
+    /// socket it read under `micShared`.
+    private nonisolated func transmit(_ frames: [[String: Any]], on socket: URLSessionWebSocketTask, connection id: Int) {
+        for obj in frames {
+            guard let data = try? JSONSerialization.data(withJSONObject: obj) else { continue }
+            socket.send(.string(String(decoding: data, as: UTF8.self))) { [weak self] err in
+                guard let err else { return }
+                DispatchQueue.main.async {
+                    // Failures on a socket that never came up, or has since been replaced, are already reported by
+                    // the reconnect logic; only a live session's send errors are news.
+                    guard let self, self.connection == id, self.established else { return }
+                    log("✖ send: \(err.localizedDescription)")
+                }
             }
         }
     }

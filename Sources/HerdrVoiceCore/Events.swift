@@ -1,7 +1,7 @@
 import Foundation
 
 /// Server events we act on. Everything else decodes to `.ignored`.
-public enum ServerEvent: Equatable {
+public enum ServerEvent: Equatable, Sendable {
     case sessionReady
     case audioDelta(itemID: String, base64: String)
     case assistantTranscript(String)

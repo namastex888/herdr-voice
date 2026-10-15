@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Voice-model tools backed by the `herdr` CLI.
 public enum HerdrTools {
@@ -6,7 +7,7 @@ public enum HerdrTools {
         Set(["enter", "esc", "up", "down", "tab", "y", "n"]).union((1...9).map(String.init))
     /// Keys that can say yes to an agent's approval prompt. `esc`, `n` and moving the selection stay ungated.
     public static let approvalKeys: Set<String> = Set(["enter", "y"]).union((1...9).map(String.init))
-    static let confirmedField: [String: Any] =
+    nonisolated(unsafe) static let confirmedField: [String: Any] =
         ["type": "boolean", "description": "true only on the second call, after the developer said yes"]
 
     /// Tools offered to the voice model. `run_shell` is only offered when HERDR_VOICE_SHELL=1.
@@ -19,7 +20,7 @@ public enum HerdrTools {
         return Array(groups.joined())
     }
 
-    static let herdrSchemas: [[String: Any]] = [
+    nonisolated(unsafe) static let herdrSchemas: [[String: Any]] = [
         fn("list_agents", "List coding agents running in Herdr panes with name, status, cwd and title.", [:], []),
         fn("prompt_agent", "Send an instruction to a coding agent. Returns once the agent starts working. "
            + "If it answers CONFIRMATION REQUIRED, ask the developer and call again with confirmed=true after they say yes.",
@@ -42,9 +43,9 @@ public enum HerdrTools {
         closeSchema("remove_worktree", "Remove a git worktree checkout that is open as a Herdr workspace; deletes the checkout directory. Refuses if it has uncommitted changes."),
     ]
 
-    public typealias Runner = ([String]) -> String
+    public typealias Runner = @Sendable ([String]) -> String
 
-    public typealias AsyncRunner = ([String], @escaping (String) -> Void) -> Void
+    public typealias AsyncRunner = @Sendable ([String], @escaping @Sendable (String) -> Void) -> Void
 
     /// Runs `herdr <args>` without holding a thread while it runs; `done` gets stdout+stderr.
     public static let herdrAsync: AsyncRunner = { args, done in
@@ -64,24 +65,23 @@ public enum HerdrTools {
     /// Blocking form for the short tool calls, which already run off the main thread and finish in milliseconds.
     public static let herdr: Runner = { args in
         let finished = DispatchSemaphore(value: 0)
-        var out = ""
-        herdrAsync(args) { out = $0; finished.signal() }
+        let out = OSAllocatedUnfairLock(initialState: "")
+        herdrAsync(args) { text in out.withLock { $0 = text }; finished.signal() }
         finished.wait()
-        return out
+        return out.withLock { $0 }
     }
 
     /// Spawns a process and collects stdout+stderr. A DispatchGroup joins "output reached EOF" and "process
     /// exited", so no thread waits while it runs, and output is drained as it arrives, so a chatty process
     /// can't fill the pipe and stall.
-    static func spawn(_ executable: String, _ arguments: [String], done: @escaping (String) -> Void) {
+    static func spawn(_ executable: String, _ arguments: [String], done: @escaping @Sendable (String) -> Void) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: executable)
         p.arguments = arguments
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = pipe
-        let lock = NSLock()
-        var data = Data()
+        let data = OSAllocatedUnfairLock(initialState: Data())
         let group = DispatchGroup()
         group.enter() // output EOF
         group.enter() // exit
@@ -91,7 +91,7 @@ public enum HerdrTools {
                 handle.readabilityHandler = nil
                 group.leave()
             } else {
-                lock.withLock { data.append(chunk) }
+                data.withLock { $0.append(chunk) }
             }
         }
         p.terminationHandler = { _ in group.leave() }
@@ -103,10 +103,10 @@ public enum HerdrTools {
             group.leave()
             return done(#"{"error":{"message":"could not run \#(executable) \#(arguments.first ?? ""): \#(error)"}}"#)
         }
-        group.notify(queue: .global()) { done(String(decoding: lock.withLock { data }, as: UTF8.self)) }
+        group.notify(queue: .global()) { done(String(decoding: data.withLock { $0 }, as: UTF8.self)) }
     }
 
-    public struct Outcome {
+    public struct Outcome: Sendable {
         public let output: String
         /// Agent to watch in the background until it settles.
         public let watch: String?
@@ -178,7 +178,7 @@ public enum HerdrTools {
     /// long as the agent's turn (up to an hour), so it holds no thread: each step continues from the previous
     /// process's exit.
     public static func settle(_ target: String, runAsync: @escaping AsyncRunner = herdrAsync, run: @escaping Runner = herdr,
-                              done: @escaping (String) -> Void) {
+                              done: @escaping @Sendable (String) -> Void) {
         // After answer_agent the agent may still show blocked for a moment; let it pick back up first.
         runAsync(["agent", "wait", target, "--until", "working", "--timeout", "5000"]) { _ in
             runAsync(["agent", "wait", target, "--timeout", "3600000"]) { out in
@@ -254,8 +254,8 @@ public enum HerdrTools {
 
     // MARK: focus
 
-    public struct FocusTarget: Equatable {
-        public enum Kind: String, CaseIterable { case agent, workspace, tab }
+    public struct FocusTarget: Equatable, Sendable {
+        public enum Kind: String, CaseIterable, Sendable { case agent, workspace, tab }
         public let kind: Kind
         public let id: String
         public let label: String
@@ -275,7 +275,7 @@ public enum HerdrTools {
         }
     }
 
-    public struct FocusError: Error, Equatable { public let text: String }
+    public struct FocusError: Error, Equatable, Sendable { public let text: String }
 
     /// Exact (case-insensitive) name or ID beats substring; within a pass, agents beat workspaces beat tabs.
     public static func resolveFocus(_ query: String, in targets: [FocusTarget]) -> Result<FocusTarget, FocusError> {

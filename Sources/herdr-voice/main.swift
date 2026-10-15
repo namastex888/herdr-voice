@@ -196,11 +196,12 @@ var localActivation = LocalActivation()
 
 /// Loads the local models off the main queue, so the orb shows the warm-up, then opens the session if Local
 /// is still the choice.
-func loadLocal(onFailure: @escaping (Error) -> Void) {
+@MainActor func loadLocal(onFailure: @escaping @MainActor (Error) -> Void) {
     let generation = localActivation.begin()
+    let runtime = localRuntime, environment = env
     DispatchQueue.global(qos: .userInitiated).async {
         do {
-            let ready = try localRuntime.prepare(environment: env)
+            let ready = try runtime.prepare(environment: environment)
             DispatchQueue.main.async {
                 guard localActivation.finish(generation, selected: session.provider) else { return }
                 log("● \(ready.label) ready")
@@ -221,7 +222,7 @@ session.relaunchLocalHelper = {
 /// The orb's right-click menu: one entry per AI model, the current one checked, ones without a key greyed out.
 /// "Show voice pane" while it's hidden behind the pane it opened next to, "Hide voice pane" while it's in view. Only when
 /// herdr-voice runs in a Herdr pane.
-func voicePaneChoice() -> Orb.MenuChoice? {
+@MainActor func voicePaneChoice() -> Orb.MenuChoice? {
     guard env["HERDR_ENV"] == "1", let me = env["HERDR_PANE_ID"] else { return nil }
     if VoicePane.isHidden(layout: HerdrTools.herdr(["pane", "layout", "--pane", me])) {
         return Orb.MenuChoice(title: "Show voice pane", checked: false, enabled: true, separatorAfter: true) {
@@ -231,7 +232,7 @@ func voicePaneChoice() -> Orb.MenuChoice? {
     return Orb.MenuChoice(title: "Hide voice pane", checked: false, enabled: true, separatorAfter: true) { hideVoicePane(me) }
 }
 
-func modelChoices() -> [Orb.MenuChoice] {
+@MainActor func modelChoices() -> [Orb.MenuChoice] {
     let models = ModelMenu.entries(current: session.provider, hasKey: { $0.apiKey(environment: env) != nil },
                                    localIsBuilt: LocalRuntime.isBuilt(environment: env))
     return (voicePaneChoice().map { [$0] } ?? []) + models.map { entry in

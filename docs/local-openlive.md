@@ -10,7 +10,7 @@ speaker or tool privileges. The main process uses OpenLive's pinned `streamProvi
 
 Local mode is a one-time setup from a source checkout. Until it has run, the orb's menu shows
 **Local OpenLive (not set up)**, greyed out. Prerequisites are macOS with WebGPU, Node 22 or later, pnpm 10 or later, Ollama with `qwen3.5:4b`, and Swift
-5.10 or later. `pnpm-lock.yaml` stays exact and is installed with `--frozen-lockfile`. Keep Ollama in local-only mode
+6.2 or later. `pnpm-lock.yaml` stays exact and is installed with `--frozen-lockfile`. Keep Ollama in local-only mode
 (`OLLAMA_NO_CLOUD=1`). Then run:
 
 ```bash

@@ -13,8 +13,8 @@ private let snapshot = #"""
   {"pane_id":"w1:p3","workspace_id":"w1","tab_id":"w1:t1","terminal_title_stripped":"herdr-voice"}]}}}
 """#
 
-private final class FakeHerdr {
-    var ran: [[String]] = []
+private final class FakeHerdr: @unchecked Sendable { // configured before use; `ran` is thread-safe
+    let ran = Recorder<[String]>()
     func run(_ args: [String]) -> String {
         ran.append(args)
         switch (args[0], args[1]) {

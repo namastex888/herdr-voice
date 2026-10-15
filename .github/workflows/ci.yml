@@ -5,10 +5,13 @@ on:
     branches-ignore: [main, master]
 jobs:
   swift:
-    runs-on: macos-15
+    runs-on: macos-26 # Xcode 26: Swift 6.2, the floor swift-tools-version:6.2 sets
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - run: swift test
+      # Serial: the parallel swift-testing run occasionally freezes a few ms in (no thread blocked; seen before the
+      # Swift 6 migration too). Serial runs have never frozen and take about 3 s.
+      - run: swift test --no-parallel
       - run: swift build -c release
   local-openlive:
     runs-on: macos-15

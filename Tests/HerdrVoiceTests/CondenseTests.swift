@@ -29,12 +29,12 @@ import Testing
 }
 
 @Test func reportsFetchExtraRawLinesAndReturnAtMostTwenty() {
-    var asked: [String] = []
+    let asked = Recorder<[String]>()
     let out = HerdrTools.read("claude-2", HerdrTools.reportLines) { args in
-        asked = args
+        asked.append(args)
         return (1...60).map { "step \($0)\n\n────" }.joined(separator: "\n")
     }
-    #expect(asked.suffix(2) == ["--lines", "60"])                 // 3x the kept lines, since most raw lines are noise
+    #expect(asked.last?.suffix(2) == ["--lines", "60"])                // 3x the kept lines, since most raw lines are noise
     #expect(out.contains("step 41") && !out.contains("step 40"))  // last 20 meaningful lines
     #expect(!out.contains("────"))
 }

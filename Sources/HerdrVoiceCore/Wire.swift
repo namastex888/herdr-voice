@@ -2,7 +2,7 @@ import Foundation
 
 /// What the session asks a provider for, independent of the provider's wire protocol. `Realtime` only speaks
 /// in these commands and in `ServerEvent`s; a `Wire` turns them into and out of that provider's messages.
-public enum WireCommand {
+public enum WireCommand: Sendable {
     /// The first message on a connection. `resumeHandle` resumes a previous session where supported.
     case setup(instructions: String, voice: String, resumeHandle: String?)
     /// A locally verified microphone onset. Cloud providers continue to use server VAD and ignore this command.
@@ -26,7 +26,7 @@ public enum WireCommand {
     case truncate(itemID: String, audioEndMs: Int)
 }
 
-public struct ToolOutput: Equatable {
+public struct ToolOutput: Equatable, Sendable {
     public let callID: String
     public let name: String
     public let output: String
@@ -42,7 +42,7 @@ public struct ToolOutput: Equatable {
 }
 
 /// How a provider's protocol differs in ways the session has to act on.
-public struct WireCapabilities: Equatable {
+public struct WireCapabilities: Equatable, Sendable {
     /// Replies are requested explicitly (`response.create`). Without it the provider answers by itself after a
     /// completed user turn or a tool response, so the session sends those only when a reply is wanted.
     public let explicitReplies: Bool
@@ -51,7 +51,8 @@ public struct WireCapabilities: Equatable {
 }
 
 /// One provider's wire protocol. A new instance is made per connection; `decode` may keep state across messages.
-public protocol Wire: AnyObject {
+/// Shared between the main queue (decode, most commands) and the mic queue (audio commands).
+public protocol Wire: AnyObject, Sendable {
     var capabilities: WireCapabilities { get }
     func encode(_ command: WireCommand) -> [[String: Any]]
     func decode(_ text: String) -> [ServerEvent]

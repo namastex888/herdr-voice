@@ -5,8 +5,8 @@ import Testing
 private let snapshot = #"{"result":{"snapshot":{"agents":[],"workspaces":[{"workspace_id":"w2H","label":"forge","pane_count":1,"agent_status":"idle"}],"tabs":[{"tab_id":"w2H:t1","label":"notes","pane_count":1,"agent_status":"idle"}]}}}"#
 
 /// Fake herdr: answers the list calls, records the rest, and replies to a create like herdr does.
-private final class FakeHerdr {
-    var ran: [[String]] = []
+private final class FakeHerdr: @unchecked Sendable { // configured before use; `ran` is thread-safe
+    let ran = Recorder<[String]>()
     var reply = #"{"result":{"type":"workspace_created","workspace":{"workspace_id":"w3C","label":"fix"},"tab":{"tab_id":"w3C:t1","label":"1"}}}"#
     func run(_ args: [String]) -> String {
         ran.append(args)

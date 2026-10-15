@@ -148,3 +148,5 @@ public enum EchoGuard {
         level < playback * ratio ? min(level, floor) : level
     }
 }
+
+extension SpeechGate: Sendable where Chunk: Sendable {}

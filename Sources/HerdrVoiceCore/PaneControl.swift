@@ -3,10 +3,10 @@ import Foundation
 /// The rest of Herdr's pane and agent commands as voice tools: close, zoom, resize, swap, move and rename panes,
 /// rename agents, explain agent detection, show what a pane runs, and run a command in a visible pane.
 extension HerdrTools {
-    static let paneDirection: [String: Any] = ["type": "string", "enum": ["left", "right", "up", "down"]]
-    static let paneTarget = str("Pane, by ID, agent name or title")
+    nonisolated(unsafe) static let paneDirection: [String: Any] = ["type": "string", "enum": ["left", "right", "up", "down"]]
+    nonisolated(unsafe) static let paneTarget = str("Pane, by ID, agent name or title")
 
-    static let paneControlSchemas: [[String: Any]] = [
+    nonisolated(unsafe) static let paneControlSchemas: [[String: Any]] = [
         fn("close_pane", "Close one pane, stopping what runs in it. Call without confirmed first, ask the developer, "
            + "then call again with confirmed=true after they say yes.",
            ["target": paneTarget, "confirmed": confirmedField], ["target"]),
@@ -35,7 +35,7 @@ extension HerdrTools {
            + "or build is still running.", ["target": paneTarget], ["target"]),
     ]
 
-    static let runInPaneSchema = fn(
+    nonisolated(unsafe) static let runInPaneSchema = fn(
         "run_in_pane",
         "Type a shell command into a pane and press enter, where the developer can see it run (a dev server, tests). "
             + "Always two calls: call without confirmed, ask the developer, then call again with confirmed=true after they say yes.",

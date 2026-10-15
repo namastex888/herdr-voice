@@ -15,7 +15,7 @@ public enum Activity {
 }
 
 /// The orb's colour: what the voice is doing right now.
-public enum Mood {
+public enum Mood: Sendable {
     case muted, listening, speaking, working, offline
 }
 

@@ -3,7 +3,7 @@ import CoreGraphics
 /// Pure decisions for pinning the orb to the terminal window that shows Herdr. The app layer supplies the process
 /// tree and the window list; everything here is testable.
 public enum WindowPin {
-    public struct Window: Equatable {
+    public struct Window: Equatable, Sendable {
         public let number: Int
         public let pid: Int32
         public let layer: Int

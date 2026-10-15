@@ -4,7 +4,7 @@ import Foundation
 /// The model cannot confirm on its own: only `heard(_:)`, fed from the mic transcript, flips the flag.
 /// Terminal output the model reads can contain injected instructions, so every action that could
 /// approve, send or destroy something goes through here.
-public final class ConfirmGate {
+public final class ConfirmGate: @unchecked Sendable { // all mutable state lives under `lock`
     public static let shared = ConfirmGate()
 
     private struct Pending {
@@ -21,13 +21,13 @@ public final class ConfirmGate {
     private var pending: Pending?
     private let ttl: TimeInterval
     private let minDelay: TimeInterval
-    private let clock: () -> Date
+    private let clock: @Sendable () -> Date
     private let wait: TimeInterval
 
     /// `minDelay` ignores transcripts that land right after the request, which are usually the
     /// request itself ("yes, close forge") arriving late rather than an answer to the question.
     public init(ttl: TimeInterval = 20, minDelay: TimeInterval = 2, wait: TimeInterval = 4,
-                clock: @escaping () -> Date = Date.init) {
+                clock: @escaping @Sendable () -> Date = { Date() }) {
         self.ttl = ttl
         self.wait = wait
         self.minDelay = minDelay

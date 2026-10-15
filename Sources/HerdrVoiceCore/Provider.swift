@@ -1,6 +1,6 @@
 import Foundation
 
-public enum Provider: String, CaseIterable {
+public enum Provider: String, CaseIterable, Sendable {
     case local, openai, grok, gemini
 
     public var url: URL {
@@ -87,7 +87,7 @@ public enum Provider: String, CaseIterable {
         }
     }
 
-    public enum KeySource: String {
+    public enum KeySource: String, Sendable {
         case keychain = "Keychain"
         case environment = "environment"
     }

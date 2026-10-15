@@ -1,7 +1,7 @@
 /// Microphone packets captured while a provider is warming or reconnecting.
 /// Local speech keeps an utterance identity so replay always begins before its audio and commits at most once.
-public struct HeldMicAudio {
-    public struct Batch: Equatable {
+public struct HeldMicAudio: Sendable {
+    public struct Batch: Equatable, Sendable {
         public let utteranceID: String?
         public let chunks: [String]
         public let closed: Bool

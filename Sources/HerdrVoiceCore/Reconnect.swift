@@ -2,7 +2,7 @@ import Foundation
 
 /// When to reconnect after the realtime connection closes.
 public enum Reconnect {
-    public enum Reason: Equatable {
+    public enum Reason: Equatable, Sendable {
         /// The provider ended the session on purpose: xAI after 15 minutes idle ("Conversation timed out after 900.0
         /// seconds due to inactivity"), OpenAI at its fixed 60-minute session limit ("session expired").
         case sessionEnded
@@ -38,7 +38,7 @@ public enum Reconnect {
 }
 
 /// The last few things said, so a new session after a reconnect still knows what the conversation was about.
-public struct Recap {
+public struct Recap: Sendable {
     public let limit: Int
     public private(set) var lines: [String] = []
     private var itemIDs: [String?] = []

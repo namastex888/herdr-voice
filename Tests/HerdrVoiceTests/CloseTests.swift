@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import HerdrVoiceCore
 
@@ -9,8 +10,8 @@ private let linked = #"{"result":{"worktrees":[{"open_workspace_id":"w9","is_lin
 private let main = #"{"result":{"worktrees":[{"open_workspace_id":"w2H","is_linked_worktree":false,"path":"/x/forge","branch":"main"}]}}"#
 
 /// Fake herdr that records every command and answers list calls.
-private final class FakeHerdr {
-    var ran: [[String]] = []
+private final class FakeHerdr: @unchecked Sendable { // configured before use; `ran` is thread-safe
+    let ran = Recorder<[String]>()
     func run(_ args: [String]) -> String {
         ran.append(args)
         switch (args[0], args[1]) {
@@ -119,10 +120,10 @@ func closeRefusesWithoutConfirmation(answer: String) {
 }
 
 @Test func confirmationExpires() {
-    var now = Date()
-    let h = FakeHerdr(), g = ConfirmGate(ttl: 20, minDelay: 0, wait: 0, clock: { now })
+    let now = OSAllocatedUnfairLock(initialState: Date())
+    let h = FakeHerdr(), g = ConfirmGate(ttl: 20, minDelay: 0, wait: 0, clock: { now.withLock { $0 } })
     _ = close("close_workspace", "forge", confirmed: false, h, g)
-    now += 21
+    now.withLock { $0 += 21 }
     g.heard("yes")
     #expect(close("close_workspace", "forge", confirmed: true, h, g).hasPrefix("NOT DONE"))
 }

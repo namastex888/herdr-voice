@@ -2,7 +2,7 @@ import Foundation
 
 /// The OpenAI Realtime protocol, which xAI's Grok Voice also speaks. These are the exact messages herdr-voice
 /// sent before the wire layer existed (see WireGoldenTests).
-public final class OpenAIRealtimeWire: Wire {
+public final class OpenAIRealtimeWire: Wire, Sendable {
     private let provider: Provider
 
     public init(provider: Provider) {

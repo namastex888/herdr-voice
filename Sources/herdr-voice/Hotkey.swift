@@ -3,7 +3,7 @@ import Carbon.HIToolbox
 /// Global hotkeys through Carbon, which needs no Accessibility permission.
 /// Mute is ⌥⌘M (override the key with HERDR_VOICE_HOTKEY_KEYCODE, modifiers stay ⌥⌘).
 /// Esc is only grabbed while the assistant is speaking, so every other app keeps its Esc.
-enum Hotkey {
+@MainActor enum Hotkey {
     static let label = "⌥⌘M"
     static let mute: UInt32 = 1
     static let stop: UInt32 = 2
@@ -59,7 +59,9 @@ enum Hotkey {
             var id = EventHotKeyID()
             GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
                               nil, MemoryLayout<EventHotKeyID>.size, nil, &id)
-            Hotkey.handlers[id.id]?()
+            // Carbon delivers application events on the main thread.
+            let pressed = id.id
+            MainActor.assumeIsolated { Hotkey.handlers[pressed]?() }
             return noErr
         }, 1, &spec, nil, nil)
     }

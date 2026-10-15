@@ -6,8 +6,8 @@ import Foundation
 /// audio (Grok by about 10 s), so cutting when the transcript reached a third sentence dropped audio of sentences
 /// that hadn't been heard yet. Code-like text (code, paths, URLs, diffs) is flagged from the transcript, and the
 /// session corrects it after the reply rather than cutting the reply mid-word.
-public struct SpeechPolicy {
-    public enum Verdict: Equatable {
+public struct SpeechPolicy: Sendable {
+    public enum Verdict: Equatable, Sendable {
         case ok
         /// The reply's audio passed `maxAudioSeconds`; stop generating.
         case tooLong

@@ -6,7 +6,7 @@ min_herdr_version = "0.9.0"
 description = "Talk to your Herdr agents: realtime voice (Grok, OpenAI or Gemini) that drives Claude Code and Codex panes, with a floating orb"
 platforms = ["macos"]
 
-# Needs Swift 5.10+ (Xcode or the Command Line Tools). The first build takes a minute or two.
+# Needs Swift 6.2+ (Xcode 26 or later, or a swift.org toolchain). The first build takes a minute or two.
 [[build]]
 command = ["swift", "build", "-c", "release"]
 

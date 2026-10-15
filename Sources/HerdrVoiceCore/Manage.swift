@@ -4,9 +4,9 @@ import Foundation
 /// (they need a spoken yes); these don't destroy anything, so they run at once when the developer asked for them.
 /// When the model acts on an agent report instead, they need a spoken yes too, like prompt_agent.
 extension HerdrTools {
-    static let focusField: [String: Any] = ["type": "boolean", "description": "Switch the view to it; default false"]
+    nonisolated(unsafe) static let focusField: [String: Any] = ["type": "boolean", "description": "Switch the view to it; default false"]
 
-    static let manageSchemas: [[String: Any]] = [
+    nonisolated(unsafe) static let manageSchemas: [[String: Any]] = [
         fn("list_workspaces", "List Herdr workspaces (spaces) with their tabs, agent status, pane counts and git checkout.", [:], []),
         fn("create_workspace", "Create a Herdr workspace (space).",
            ["label": str("Name for it"), "cwd": str("Folder to open it in, e.g. ~/dev/app; default is Herdr's"),

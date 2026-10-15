@@ -7,7 +7,7 @@ import Foundation
 /// at once (heard as an echo, the voice repeating itself) and each could call the tools again, so bursts cascaded.
 /// Here every result, report or retry only marks that a reply is wanted; the request goes out once the current
 /// response has finished and every tool call from it has answered.
-public struct ResponseScheduler {
+public struct ResponseScheduler: Sendable {
     public private(set) var responseActive = false
     public private(set) var callsInFlight = 0
     public private(set) var replyWanted = false
@@ -57,7 +57,7 @@ public struct ResponseScheduler {
 
 /// Drops a tool call identical (same tool, same arguments) to one made moments ago. When several responses ran at
 /// once they each repeated the same calls, and some tools must not run twice (a prompt sent to an agent twice).
-public struct CallDeduper {
+public struct CallDeduper: Sendable {
     public let window: TimeInterval
     private var recent: [(key: String, at: Date)] = []
 

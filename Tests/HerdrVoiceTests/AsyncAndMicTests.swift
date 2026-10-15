@@ -64,15 +64,15 @@ import Testing
 }
 
 @Test func settleHoldsNoThreadWhileTheAgentWorks() {
-    var pending: [(args: [String], finish: (String) -> Void)] = []
-    var report: String?
+    let pending = Recorder<(args: [String], finish: @Sendable (String) -> Void)>()
+    let report = Recorder<String>()
     HerdrTools.settle("claude-2", runAsync: { args, finish in pending.append((args, finish)) },
-                      run: { _ in "tests pass" }) { report = $0 }
+                      run: { _ in "tests pass" }) { report.append($0) }
     // settle returned at once; the first wait is in flight and nothing is blocked.
-    #expect(report == nil && pending.count == 1 && pending[0].args.contains("working"))
+    #expect(report.isEmpty && pending.count == 1 && pending[0].args.contains("working"))
     pending[0].finish("")
     #expect(pending.count == 2 && pending[1].args.contains("3600000"))
     pending[1].finish(#"{"result":{"agent":{"agent_status":"done"}}}"#)
-    #expect(report?.hasPrefix("Agent claude-2 is now done.") == true)
-    #expect(report?.contains("tests pass") == true)
+    #expect(report.last?.hasPrefix("Agent claude-2 is now done.") == true)
+    #expect(report.last?.contains("tests pass") == true)
 }

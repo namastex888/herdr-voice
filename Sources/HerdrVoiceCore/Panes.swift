@@ -2,7 +2,7 @@ import Foundation
 
 /// Reading and watching any terminal pane, not just coding agents: dev servers, builds, logs.
 extension HerdrTools {
-    static let paneSchemas: [[String: Any]] = [
+    nonisolated(unsafe) static let paneSchemas: [[String: Any]] = [
         fn("list_panes", "List every terminal pane, not just agents: ID, workspace, tab, folder, title (usually the "
            + "running command) and agent if any. Use it to find a dev server, build or log pane.",
            ["workspace": str("Only panes in this workspace (name or ID)")], []),
@@ -22,10 +22,10 @@ extension HerdrTools {
 
     static let paneTools: Set<String> = ["list_panes", "read_pane", "watch_pane"]
 
-    static let directionField: [String: Any] =
+    nonisolated(unsafe) static let directionField: [String: Any] =
         ["type": "string", "enum": ["right", "down"], "description": "Where the new pane goes: right (side by side) or down (below); default right"]
 
-    static let splitPaneSchema = fn(
+    nonisolated(unsafe) static let splitPaneSchema = fn(
         "split_pane",
         "Split a pane to the right or down, opening a new shell pane next to it. Returns the new pane's ID, which "
             + "read_pane, watch_pane and start_agent can use.",
@@ -71,7 +71,7 @@ extension HerdrTools {
     }
 
     /// A pane watch the session runs in the background (see `watchPane`).
-    public struct PaneWatch: Equatable {
+    public struct PaneWatch: Equatable, Sendable {
         public let pane: String
         public let label: String
         /// What's awaited, for the report: "\"done\"".
@@ -84,7 +84,7 @@ extension HerdrTools {
     /// further up doesn't answer a new wait.
     static let watchLines = 15
 
-    public struct PaneRow: Equatable {
+    public struct PaneRow: Equatable, Sendable {
         public let id: String
         public let workspace: String
         public let tab: String
@@ -142,7 +142,7 @@ extension HerdrTools {
     }
 
     /// Waits for the watch's text at the bottom of the pane, holding no thread, then describes the outcome.
-    public static func watchPane(_ w: PaneWatch, runAsync: @escaping AsyncRunner = herdrAsync, done: @escaping (String) -> Void) {
+    public static func watchPane(_ w: PaneWatch, runAsync: @escaping AsyncRunner = herdrAsync, done: @escaping @Sendable (String) -> Void) {
         let started = Date()
         runAsync(["pane", "wait-output", w.pane, "--regex", w.regex, "--lines", String(watchLines),
                   "--timeout", String(w.timeoutMs)]) { out in

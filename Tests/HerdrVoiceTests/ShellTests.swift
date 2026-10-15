@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import HerdrVoiceCore
 
@@ -11,20 +12,20 @@ private func gate() -> ConfirmGate { ConfirmGate(minDelay: 0, wait: 0.2) }
 }
 
 @Test func everyCommandNeedsASpokenYesForThatExactCommand() {
-    var ran: [String] = []
-    let exec: HerdrTools.ShellExec = { cmd, _, _ in ran.append(cmd); return .init(status: 0, output: "ok", timedOut: false) }
+    let ran = OSAllocatedUnfairLock(initialState: [String]())
+    let exec: HerdrTools.ShellExec = { cmd, _, _ in ran.withLock { $0.append(cmd) }; return .init(status: 0, output: "ok", timedOut: false) }
     let g = gate()
 
     #expect(HerdrTools.runShell("git status", cwd: "/tmp", confirmed: false, g, exec: exec).hasPrefix("CONFIRMATION REQUIRED"))
     #expect(HerdrTools.runShell("git status", cwd: "/tmp", confirmed: true, gate(), exec: exec).hasPrefix("NOT DONE")) // model alone
     g.heard("yes")
     #expect(HerdrTools.runShell("rm -rf ~", cwd: "/tmp", confirmed: true, g, exec: exec).hasPrefix("NOT DONE"))       // swapped
-    #expect(ran.isEmpty)
+    #expect(ran.withLock { $0 }.isEmpty)
 
     _ = HerdrTools.runShell("git status", cwd: "/tmp", confirmed: false, g, exec: exec)
     g.heard("yes, run it")
     let out = HerdrTools.runShell("git status", cwd: "/tmp", confirmed: true, g, exec: exec)
-    #expect(ran == ["git status"])
+    #expect(ran.withLock { $0 } == ["git status"])
     #expect(out.hasPrefix("exit 0\n<<<UNTRUSTED TERMINAL OUTPUT"))
 }
 

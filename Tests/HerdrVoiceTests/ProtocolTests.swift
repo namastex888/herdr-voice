@@ -23,7 +23,7 @@ func audioDeltaVariants(type: String) {
 }
 
 @Test func answerAgentRejectsKeysOutsideAllowlist() {
-    var ran: [[String]] = []
+    let ran = Recorder<[String]>()
     let out = HerdrTools.call("answer_agent", arguments: #"{"target":"claude-2","key":"ctrl+c"}"#) { ran.append($0); return "" }
     #expect(out.output.contains("not allowed"))
     #expect(ran.isEmpty)
@@ -69,7 +69,7 @@ func focusResolves(query: String, id: String) throws {
 }
 
 @Test func focusToolRunsTheMatchingFocusCommand() {
-    var ran: [[String]] = []
+    let ran = Recorder<[String]>()
     let out = HerdrTools.call("focus", arguments: #"{"target":"forge"}"#) { args in
         ran.append(args)
         switch args.first {

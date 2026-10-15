@@ -5,7 +5,7 @@ import Foundation
 extension HerdrTools {
     public static let agentKinds = ["claude", "codex"]
 
-    static let startAgentSchema = fn(
+    nonisolated(unsafe) static let startAgentSchema = fn(
         "start_agent",
         "Start a Claude Code or Codex agent somewhere new in one step: next to an existing pane (give split, and "
             + "direction right or down), in a new git worktree (give workspace and branch), "

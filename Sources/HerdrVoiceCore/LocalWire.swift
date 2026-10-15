@@ -1,8 +1,8 @@
 import CryptoKit
 import Foundation
 
-public struct ToolManifest: Equatable {
-    public struct Profile: Equatable {
+public struct ToolManifest: Equatable, Sendable {
+    public struct Profile: Equatable, Sendable {
         public let name: String
         public let count: Int
         public let digest: String
@@ -36,7 +36,7 @@ public extension HerdrTools {
 
 /// Herdr's authenticated loopback protocol for the OpenLive inference host.
 /// Every turn event carries an epoch. The epoch drops results from cancelled GPU work.
-public final class LocalWire: Wire {
+public final class LocalWire: Wire, @unchecked Sendable { // epoch and utteranceID live under `lock`
     public let capabilities = WireCapabilities(explicitReplies: true, nativeResumption: false)
 
     private let lock = NSLock()

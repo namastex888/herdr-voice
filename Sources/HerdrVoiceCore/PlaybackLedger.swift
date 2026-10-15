@@ -1,4 +1,4 @@
-public struct PlaybackLedger {
+public struct PlaybackLedger: Sendable {
     private struct Buffer {
         let item: String
         let frames: Int

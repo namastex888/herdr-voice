@@ -1,9 +1,10 @@
 import Foundation
 import HerdrVoiceCore
+import os
 import Security
 
 /// One owned Electron inference host. Its session token and optional brain key travel over stdin, never argv.
-final class LocalRuntime {
+final class LocalRuntime: @unchecked Sendable { // process, input and generation live under `lifecycle`
     struct Ready {
         let request: URLRequest
         let label: String
@@ -54,37 +55,42 @@ final class LocalRuntime {
         child.standardOutput = stdout
         child.standardError = FileHandle.standardError
 
-        let lock = NSLock()
-        var bytes = Data()
-        var result: Result<[String: Any], Error>?
+        /// Filled from the child's stdout and termination handlers; `result` holds the raw readiness line.
+        struct Startup {
+            var bytes = Data()
+            var result: Result<Data, RuntimeError>?
+        }
+        let startup = OSAllocatedUnfairLock(initialState: Startup())
         let ready = DispatchSemaphore(value: 0)
         stdout.fileHandleForReading.readabilityHandler = { handle in
             let chunk = handle.availableData
             guard !chunk.isEmpty else { return }
-            lock.lock()
-            defer { lock.unlock() }
-            bytes.append(chunk)
-            if bytes.count > 64 * 1024 {
-                result = .failure(RuntimeError.failed("Local OpenLive readiness output was too large"))
-                ready.signal()
-                return
+            let decided = startup.withLock { s -> Bool in
+                s.bytes.append(chunk)
+                if s.bytes.count > 64 * 1024 {
+                    s.result = .failure(.failed("Local OpenLive readiness output was too large"))
+                    return true
+                }
+                while s.result == nil, let newline = s.bytes.firstIndex(of: 10) {
+                    let line = Data(s.bytes[..<newline])
+                    s.bytes.removeSubrange(...newline)
+                    guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                          object["type"] as? String == "ready" else { continue }
+                    s.result = .success(line)
+                    return true
+                }
+                return false
             }
-            while result == nil, let newline = bytes.firstIndex(of: 10) {
-                let line = Data(bytes[..<newline])
-                bytes.removeSubrange(...newline)
-                guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                      object["type"] as? String == "ready" else { continue }
-                result = .success(object)
-                ready.signal()
-            }
+            if decided { ready.signal() }
         }
         child.terminationHandler = { process in
-            lock.lock()
-            defer { lock.unlock() }
-            if result == nil {
-                result = .failure(RuntimeError.failed("Local OpenLive exited during startup (status \(process.terminationStatus))"))
-                ready.signal()
+            let status = process.terminationStatus
+            let decided = startup.withLock { s -> Bool in
+                guard s.result == nil else { return false }
+                s.result = .failure(.failed("Local OpenLive exited during startup (status \(status))"))
+                return true
             }
+            if decided { ready.signal() }
         }
         do { try child.run() } catch { throw RuntimeError.failed("Could not start Local OpenLive: \(error.localizedDescription)") }
         lifecycle.lock()
@@ -108,7 +114,10 @@ final class LocalRuntime {
         }
         stdout.fileHandleForReading.readabilityHandler = nil
         let object: [String: Any]
-        do { object = try lock.withLock { try result!.get() } } catch {
+        do {
+            let line = try startup.withLock { $0.result! }.get()
+            object = try JSONSerialization.jsonObject(with: line) as? [String: Any] ?? [:]
+        } catch {
             stop(operation: operation, child: child) // an invalid readiness record must not leave the child running
             throw error
         }
