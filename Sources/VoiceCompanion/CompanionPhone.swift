@@ -254,6 +254,8 @@ extension CompanionController {
         tickActivation(at: now)
         tickMinimizer(at: now)
         if !activationMode.opensOnRequest { recorder.tick(at: now) }
+        numbers.frame(at: now, connected: chat.controls.link == .connected,
+                      busy: chat.controls.speaking || (session?.replying ?? false))
         updateLive(at: now)
     }
 

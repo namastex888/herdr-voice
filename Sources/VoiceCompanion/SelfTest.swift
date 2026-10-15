@@ -103,6 +103,7 @@ import VoiceEngine
     checkActivation(controller, session, check)
     checkVoiceControl(controller, session, gate, check)
     checkVoiceMode(controller, session, gate, check)
+    checkMetrics(controller, session, check)
     checkVoiceChat(controller, check)
     checkPhone(controller, window, check)
 
@@ -313,6 +314,36 @@ import VoiceEngine
     check("switching the model or the shell on by voice still needs your spoken yes",
           model.hasPrefix("CONFIRMATION REQUIRED") && shell.hasPrefix("CONFIRMATION REQUIRED")
               && controller.settings.provider == nil && registry.tree["harness.shell"]?.disabled == true, model)
+}
+
+/// The day's numbers: one scripted OpenAI turn, fed through the session's own callbacks (speech, transcript, a tool,
+/// usage, her audio), lands in the aggregate with its latency, action, talk time and token cost, and in metrics.json.
+@MainActor private func checkMetrics(_ controller: CompanionController, _ session: Realtime,
+                                     _ check: (String, Bool, String) -> Void) {
+    let numbers = controller.numbers, provider = numbers.provider
+    numbers.flush()
+    let before = numbers.today
+    numbers.provider = .openai
+    session.onSpeech?(true)
+    session.onSpeech?(false)
+    session.onEvent?(.you("which agents are running"))
+    session.onEvent?(.toolCall(name: "list_agents", arguments: "{}"))
+    session.onEvent?(.toolResult(name: "list_agents", output: "[]"))
+    session.onUsage?(RealtimeUsage(inputAudioTokens: 1000, outputAudioTokens: 500))
+    session.audio.onPlayed?(syntheticSpeech(seconds: 0.5, seed: 6), "metrics-1")
+    session.onEvent?(.voice("None are running right now."))
+    numbers.frame(at: Date().addingTimeInterval(3), connected: false, busy: false)
+    numbers.frame(at: Date().addingTimeInterval(5), connected: false, busy: false)
+    numbers.flush()
+    numbers.drain()
+    let after = numbers.today, saved = MetricsLedger.load(controller.home.metrics).day(Date())
+    let cost = (after.cost["openai"] ?? 0) - (before.cost["openai"] ?? 0)
+    check("a turn lands in the day's numbers: turns, actions, latency, her talk time and its token cost, in metrics.json",
+          after.turns == before.turns + 1 && after.actions == before.actions + 1
+              && after.latencyCount == before.latencyCount + 1 && after.voxTalkSeconds > before.voxTalkSeconds
+              && abs(cost - (1000 * 32 + 500 * 64) / 1_000_000) < 1e-9 && saved == after,
+          String(format: "%d turns, $%.4f, %.0f ms", after.turns, after.totalCost, after.averageLatencyMs ?? -1))
+    numbers.provider = provider
 }
 
 /// The voice chat: a spoken exchange becomes two voice notes with transcripts, saved as WAV files and a transcript

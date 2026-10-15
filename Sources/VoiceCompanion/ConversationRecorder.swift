@@ -27,6 +27,8 @@ import VoiceEngine
     var micAllowed: () -> Bool = { true }
     /// Seconds of speech, per side, as they come: the talk-time metric.
     var onTalk: ((VoiceClip.Side, Double) -> Void)?
+    /// A new conversation began (the conversations metric).
+    var onConversation: (() -> Void)?
 
     private var assembler = VoiceChatAssembler()
     private var savedAudio: [Int: String] = [:]
@@ -109,6 +111,7 @@ import VoiceEngine
         conversationID = ConversationStore.newID(at: now)
         started = now
         clips = []
+        onConversation?()
     }
 
     private func changed(at now: Date, saving: Bool) {

@@ -23,6 +23,8 @@ import os
     public var onEvent: ((SessionEvent) -> Void)?
     /// Each of the user's turns, spoken or typed, as soon as its text is known (the companion routes skills on it).
     public var onUserTurn: ((String) -> Void)?
+    /// What each response used, where the provider reports it (OpenAI): the companion prices the turn with it.
+    public var onUsage: ((RealtimeUsage) -> Void)?
 
     public private(set) var provider: Provider { didSet { capabilities = provider.capabilities } }
     /// The provider's protocol differences. Follows `provider` rather than `wire`: while a switch is still preparing,
@@ -1085,6 +1087,8 @@ import os
             // Tool results from this turn are answered together, in one reply, once it's finished.
             if replies.responseDone() { requestResponse() }
             if renewWhenIdle && !replies.responseActive && replies.callsInFlight == 0 { renewConnection() }
+        case .usage(let usage):
+            onUsage?(usage)
         case .resumptionHandle(let handle):
             resumeHandle = handle
         case .sessionEnding:

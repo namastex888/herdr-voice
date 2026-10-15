@@ -317,6 +317,7 @@ struct SettingsScreen: View {
                     memory
                     voice
                     keysCard
+                    prices
                     routing
                     look
                     reset
@@ -441,6 +442,32 @@ struct SettingsScreen: View {
                 PhoneField("\(provider.menuTitle) key\(keys.hasKey(provider) ? " (saved)" : "")", value: "",
                            placeholder: keys.hasKey(provider) ? "Saved; paste to replace" : "Paste a key", secure: true) {
                     controller.saveKey($0, for: provider)
+                }
+            }
+        }
+    }
+
+    /// What each voice model costs, as the cockpit prices it (a versioned table).
+    private var prices: some View {
+        let table = PriceTable.current
+        return Card(title: "Prices", footer: "Price table \(table.version). OpenAI is priced from each response's token "
+                    + "usage, Grok by connected minutes; Gemini is estimated by the minute.") {
+            ForEach(table.rows, id: \.provider) { row in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text(row.provider.menuTitle).font(.system(size: 13, weight: .semibold))
+                        Text(row.model).font(.system(size: 11)).foregroundStyle(theme.onSurfaceVariant)
+                        Spacer()
+                        if row.estimated {
+                            Text("estimated").font(.system(size: 10, weight: .medium))
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Capsule().fill(theme.tertiaryContainer))
+                                .foregroundStyle(theme.onTertiaryContainer)
+                        }
+                    }
+                    .foregroundStyle(theme.onSurface)
+                    Text(row.summary).font(.system(size: 11)).foregroundStyle(theme.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

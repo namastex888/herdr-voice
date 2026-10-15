@@ -15,6 +15,8 @@ public enum ServerEvent: Equatable, Sendable {
     case functionCall(callID: String, name: String, arguments: String)
     case localFunctionCall(epoch: Int, callID: String, name: String, arguments: String)
     case responseDone
+    /// What the response used, decoded from OpenAI's `response.done` (emitted just before `.responseDone`).
+    case usage(RealtimeUsage)
     /// The provider will close this connection soon (Gemini `goAway`).
     case sessionEnding
     /// A handle to resume this session, context included, on the next connection (Gemini).

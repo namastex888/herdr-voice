@@ -103,6 +103,8 @@ import VoiceEngine
     /// The voice chat: both sides' voice notes, kept on disk until deleted.
     let recorder: ConversationRecorder
     let player = VoiceNotePlayer()
+    /// The day's numbers (`~/.vox/metrics.json`) the cockpit reads.
+    let numbers: MetricsRecorder
 
     /// `store` is where `config.json` lives; the first time it is built from 0.1.0's settings (`legacyDefaults`) and
     /// skills folder. nil keeps the configuration in memory. `gate` holds proposals until the human's own yes.
@@ -113,6 +115,7 @@ import VoiceEngine
         self.gate = gate
         self.home = home
         recorder = ConversationRecorder(store: ConversationStore(root: home.conversations))
+        numbers = MetricsRecorder(url: home.metrics, provider: .grok)
         configDirectory = store?.directory
         // Her own app's controls (the companion harness) run here, through the bridge, on the same gate the
         // session's heard words go to.
@@ -126,6 +129,9 @@ import VoiceEngine
         bridge.attach(self)
         chat.provider = provider
         recorder.provider = provider.rawValue
+        numbers.provider = provider
+        recorder.onTalk = { [weak self] side, seconds in self?.numbers.talk(side, seconds: seconds) }
+        recorder.onConversation = { [weak self] in self?.numbers.conversationStarted() }
         recorder.micAllowed = { [weak self] in
             guard let session = self?.session else { return true }
             return !session.muted && !session.paused
@@ -200,6 +206,7 @@ import VoiceEngine
     private func startSession() {
         provider = chosenProvider()
         chat.provider = provider
+        numbers.provider = provider
         guard let key = keys.key(for: provider) else {
             chat.note("Add a \(provider.menuTitle) API key in Settings to start talking.")
             phone.screen = .settings
@@ -229,16 +236,25 @@ import VoiceEngine
         session.onEvent = { [weak self] event in
             self?.chat.append(event)
             self?.recorder.heard(event)
+            self?.numbers.heard(event)
             self?.sessionSaid(event)
         }
+        session.onUsage = { [weak self] usage in self?.numbers.usage(usage) }
         // The voice chat keeps exactly what was sent of the mic and what was played of her.
         session.setSentMicTap { [weak recorder] audio in
             guard let pcm = Data(base64Encoded: audio) else { return }
             DispatchQueue.main.async { recorder?.mic(pcm) }
         }
-        session.audio.onPlayed = { [weak self] pcm, item in self?.recorder.played(pcm, item: item) }
+        session.audio.onPlayed = { [weak self] pcm, item in
+            self?.recorder.played(pcm, item: item)
+            self?.numbers.replyAudio()
+        }
         session.onUserTurn = { [weak self] in self?.userSaid($0) }
-        session.onSpeech = { [weak self] started in self?.activation(started ? .speechStarted : .speechStopped) }
+        session.onSpeech = { [weak self] started in
+            guard let self else { return }
+            self.numbers.speech(started: started, interrupting: started && self.chat.controls.speaking)
+            self.activation(started ? .speechStarted : .speechStopped)
+        }
         session.audio.onSpeakingChanged = { [weak self] _ in self?.updateEscape() }
         self.session = session
         syncControls()
@@ -264,6 +280,7 @@ import VoiceEngine
     }
 
     func quit() {
+        numbers.flush()
         session?.shutdown()
         // A moment for the WebSocket close frame to go out.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
@@ -279,6 +296,7 @@ import VoiceEngine
             return
         }
         recorder.typed(text)
+        numbers.typed(text)
         session.sendTyped(text) // ends a pause or a disconnect: typing is an explicit request
         syncControls()
     }
@@ -315,6 +333,7 @@ import VoiceEngine
     }
 
     func stopSpeaking() {
+        if chat.controls.speaking { numbers.interrupted() }
         session?.stopSpeech(reason: "you pressed Stop")
         syncControls()
     }
@@ -361,9 +380,11 @@ import VoiceEngine
     private func route(_ text: String) {
         recentTurns = Array((recentTurns + [text]).suffix(Self.routingContext))
         let router = router, options = registry.routeOptions, recent = Array(recentTurns.dropLast())
+        let asked = Date()
         Task { @MainActor [weak self] in
             guard let decision = await router.route(text, recent: recent, options: options), let self else { return }
             self.chat.lastRoute = decision
+            self.numbers.route(decision, milliseconds: Date().timeIntervalSince(asked) * 1000)
             if decision.skill != RouteDecision.chat { self.registry.activate(decision.skill) }
         }
     }
@@ -409,6 +430,7 @@ import VoiceEngine
     private func followProvider() {
         provider = chosenProvider()
         chat.provider = provider
+        numbers.provider = provider
         guard let key = keys.key(for: provider) else {
             chat.note("\(provider.menuTitle) has no API key yet; add one in Settings.")
             notice = "Add a \(provider.menuTitle) key below to talk with it."
