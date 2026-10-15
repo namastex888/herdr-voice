@@ -50,6 +50,12 @@ learns the rest from you.
   Revert) and how she has grown. **Settings** edits her identity and memory, picks the voice model, stores keys in
   your Keychain (it can reuse MeetingPulse's Jev key) and can reset her to a new hire. Risky actions keep
   herdr-voice's rule: only your own yes confirms them.
+- **Session controls** sit under the chat's header on every tab, and in the orb's right-click menu and the menu bar,
+  next to the session's state (Connected, Idle, Muted, Paused, Disconnected, Offline). **Mute** turns the mic off
+  (`⌥⌘M`); she can still talk. **Pause** holds everything: mic off, speech cut, replies and agent reports kept until
+  **Resume**. **Stop speaking** cuts the current reply (also `Esc`). **Disconnect** closes the session now, so billing
+  stops, and nothing reopens it, not speech, not an agent report, until **Connect** or a message you type; reports that
+  came in meanwhile are said then. Typing a message also ends a pause.
 - Everything she is lives in `~/Library/Application Support/Voice Companion/config.json`; 0.1.0's settings and
   learned skills are carried over the first time.
 

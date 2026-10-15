@@ -1,11 +1,13 @@
 import AppKit
 import HerdrVoiceCore
+import SwiftUI
+import VoiceEngine
 
 /// `VoiceCompanion --self-test`: builds what a launch builds except the voice session (no microphone, no network,
 /// no API key), from a scratch configuration, opens the chat panel and each tab, pushes a typed turn through routing,
 /// runs two read-only Mac actions, and checks the new hire: factory state, a greeting that names its harnesses and
-/// asks for a first task, and self-changes that stop for the user's yes and change nothing without it. Prints each
-/// check; exits 0 only if all pass.
+/// asks for a first task, and self-changes that stop for the user's yes and change nothing without it. Then drives the
+/// session controls on a session it never starts. Prints each check; exits 0 only if all pass.
 @MainActor func runSelfTest() -> Int32 {
     var failures = 0
     func check(_ name: String, _ ok: Bool, _ detail: String = "") {
@@ -95,9 +97,72 @@ import HerdrVoiceCore
     }
     check("each tab opens", window.isVisible && controller.harnesses.contains { $0.id == "harness.mac" })
 
+    checkSessionControls(controller, check)
+
     window.panel.orderOut(nil)
     print(failures == 0 ? "all checks passed" : "\(failures) check(s) failed")
     return failures == 0 ? 0 : 1
+}
+
+/// Mute, Pause, Stop speaking and Connect/Disconnect, driven through the controller on a session that is never
+/// started: no microphone, and no network (Local without its runtime stays closed, so Connect and a typed message
+/// only clear the disconnect and leave the session to open once the runtime is up).
+@MainActor private func checkSessionControls(_ controller: CompanionController,
+                                             _ check: (String, Bool, String) -> Void) {
+    func titles() -> [String] { controller.orbMenu().map(\.title) }
+    func enabled(_ title: String) -> Bool? { controller.orbMenu().first { $0.title == title }?.enabled }
+    let state = { controller.chat.controls.state }
+
+    let none = controller.controlChoices()
+    check("without a session the controls are listed and off",
+          none.map(\.title).contains("Mute") && !none.contains { $0.enabled }, none.map(\.title).joined(separator: ", "))
+
+    setenv("HERDR_VOICE_ECHO_CANCEL", "0", 1) // the unstarted engine's voice processing is left alone
+    let session = Realtime(provider: .local, key: "", voice: "", host: controller.registry,
+                           instructions: controller.registry.instructions, greeting: controller.registry.greeting)
+    controller.attach(session)
+    session.onUserTurn = nil // a typed turn below would be routed, and the router may call Jev
+
+    let bar = NSHostingView(rootView: ControlBar(controller: controller, chat: controller.chat))
+    bar.layoutSubtreeIfNeeded()
+    let size = bar.fittingSize
+    check("the control bar renders", size.width > 0 && size.height > 0, "\(Int(size.width))×\(Int(size.height))")
+
+    let orb = titles(), menuBar = controller.statusMenuItems().map(\.title)
+    let expected = ["Voice: Offline", "Mute", "Pause", SessionControls.stopTitle, "Connect"]
+    check("the orb's menu and the menu bar have every control",
+          expected.allSatisfy(orb.contains) && expected.allSatisfy(menuBar.contains), orb.joined(separator: ", "))
+    check("Stop speaking is off while nothing is said", enabled(SessionControls.stopTitle) == false, "")
+
+    controller.toggleMute()
+    let muted = session.muted && state() == "Muted" && titles().contains("Unmute") && !controller.chat.controls.listening
+    controller.toggleMute()
+    check("Mute mutes even while the session is closed, and unmutes", muted && !session.muted, state())
+
+    controller.togglePause()
+    let paused = session.paused && state() == "Paused" && titles().contains("Resume")
+        && Activity.mood(controls: controller.chat.controls, loading: false, agentsWorking: false, micQuiet: true) == .muted
+    controller.togglePause()
+    check("Pause holds (muted mood) and Resume lets go", paused && !session.paused, state())
+
+    let idleOffersDisconnect = state() == "Idle" && titles().contains("Disconnect") // it would reopen on speech
+    controller.toggleConnection()
+    let disconnected = idleOffersDisconnect && session.disconnectedByUser && state() == "Disconnected"
+        && titles().contains("Connect")
+        && Activity.mood(controls: controller.chat.controls, loading: false, agentsWorking: false, micQuiet: true) == .offline
+    session.toggleMute() // the engine's toggle (the plugin's hotkey) mutes, and doesn't reopen what the user closed
+    let stays = session.disconnectedByUser && session.muted && session.status == .disconnected
+    session.toggleMute()
+    controller.toggleConnection()
+    check("Disconnect stays closed (offline mood) until Connect", disconnected && stays && !session.disconnectedByUser,
+          state())
+
+    session.disconnect()
+    controller.togglePause()
+    controller.send("are you there")
+    check("a typed message ends a disconnect and a pause",
+          !session.disconnectedByUser && !session.paused && controller.chat.lines.contains { $0.text == "are you there" },
+          state())
 }
 
 private func json(_ object: [String: Any]) -> String {

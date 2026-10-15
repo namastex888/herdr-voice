@@ -20,8 +20,8 @@ import VoiceEngine
     @Published private(set) var lines: [Line] = []
     @Published var activeSkills: [String] = []
     @Published var lastRoute: RouteDecision?
-    @Published var muted = false
-    @Published var connected = false
+    /// The session controls' state (see `CompanionController.syncControls`).
+    @Published var controls = SessionControls()
     @Published var provider: Provider = .grok
 
     func append(_ event: SessionEvent) {

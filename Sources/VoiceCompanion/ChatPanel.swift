@@ -1,6 +1,7 @@
 import AppKit
 import HerdrVoiceCore
 import SwiftUI
+import VoiceEngine
 
 /// A floating panel that can take typing. An accessory app's non-activating panel never becomes key, so this one is
 /// a plain panel that may, and the app activates itself when the panel is shown.
@@ -67,25 +68,86 @@ struct CompanionView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Circle().fill(chat.connected ? Color.green : Color.secondary.opacity(0.5)).frame(width: 8, height: 8)
-                .help(chat.connected ? "Connected" : "Not connected; it opens when you speak or type")
-            VStack(alignment: .leading, spacing: 0) {
-                Text(controller.name).font(.headline).lineLimit(1)
-                Text(chat.provider.menuTitle).font(.caption).foregroundStyle(.secondary)
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(controller.name).font(.headline).lineLimit(1)
+                    Text(chat.provider.menuTitle).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Picker("", selection: $controller.tab) {
+                    ForEach(CompanionTab.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 210)
             }
-            Spacer()
-            Picker("", selection: $controller.tab) {
-                ForEach(CompanionTab.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 210)
-            Button { controller.toggleMute() } label: {
-                Image(systemName: chat.muted ? "mic.slash.fill" : "mic.fill")
-                    .foregroundStyle(chat.muted ? Color.red : Color.primary)
-            }
-            .buttonStyle(.borderless).help(chat.muted ? "Unmute (⌥⌘M)" : "Mute (⌥⌘M)")
+            ControlBar(controller: controller, chat: chat)
         }
         .padding(.horizontal, 14).padding(.top, 30).padding(.bottom, 10)
+    }
+}
+
+/// Mute, pause, stop speaking and connect, always in view on every tab, beside the session's state. Titles show when
+/// the panel is wide enough; the icons alone otherwise, with the titles as tooltips.
+struct ControlBar: View {
+    @ObservedObject var controller: CompanionController
+    @ObservedObject var chat: ChatModel
+
+    var body: some View {
+        let c = chat.controls
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Circle().fill(Self.tint(c)).frame(width: 8, height: 8)
+                Text(c.state).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+            }
+            .help(c.detail)
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 4)
+            ViewThatFits(in: .horizontal) {
+                buttons(c).labelStyle(.titleAndIcon)
+                buttons(c).labelStyle(.iconOnly)
+            }
+        }
+    }
+
+    private func buttons(_ c: SessionControls) -> some View {
+        HStack(spacing: 6) {
+            control(c.muteTitle, c.muteSymbol, help: "\(c.muteTitle) the mic (\(Hotkey.label)); the voice can still talk",
+                    on: c.muted) { controller.toggleMute() }
+            control(c.pauseTitle, c.pauseSymbol,
+                    help: c.paused ? "Resume: the mic and the voice come back, and what waited is said"
+                                   : "Pause: mic off, speech stopped, replies and agent reports held until you resume",
+                    on: c.paused) { controller.togglePause() }
+            control(SessionControls.stopTitle, SessionControls.stopSymbol, help: "Stop speaking (Esc)", on: false) {
+                controller.stopSpeaking()
+            }
+            .disabled(!c.canStopSpeaking)
+            control(c.connectTitle, c.connectSymbol,
+                    help: c.connectCloses ? "Disconnect: close the session now; it stays closed until you connect or type"
+                                               : "Connect: open the session now",
+                    on: c.link == .disconnected) { controller.toggleConnection() }
+        }
+        .disabled(!c.available)
+        .controlSize(.small)
+        .buttonStyle(.bordered)
+    }
+
+    /// `on`: the control is holding something (muted, paused, disconnected), so it shows tinted.
+    private func control(_ title: String, _ symbol: String, help: String, on: Bool,
+                         _ action: @escaping () -> Void) -> some View {
+        Button(action: action) { Label(title, systemImage: symbol) }
+            .tint(on ? Color.orange : nil)
+            .help(help)
+    }
+
+    private static func tint(_ c: SessionControls) -> Color {
+        guard c.available else { return Color.secondary.opacity(0.5) }
+        if c.link == .disconnected { return .red }
+        if c.paused || c.muted { return .orange }
+        return switch c.link {
+        case .connected: .green
+        case .idle: Color.secondary.opacity(0.5)
+        case .offline, .disconnected: .red
+        }
     }
 }
 

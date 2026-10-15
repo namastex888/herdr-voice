@@ -65,6 +65,8 @@ import VoiceEngine
     private var window: ChatWindow?
     private var orb: Orb?
     private var statusItem: NSStatusItem?
+    /// The status menu's delegate (menus hold theirs weakly).
+    private var menuRebuilder: MenuRebuilder?
     private var recentTurns: [String] = []
     private var refreshTimer: Timer?
     private var activeObserver: NSObjectProtocol?
@@ -151,19 +153,28 @@ import VoiceEngine
         let session = Realtime(provider: provider, key: key, voice: voice, host: registry,
                                instructions: registry.instructions, greeting: registry.greeting)
         session.setTools(registry.activeTools)
+        attach(session)
+        do {
+            try session.start()
+        } catch {
+            self.session = nil
+            syncControls()
+            chat.note("The microphone didn't start: \(error.localizedDescription). Allow it in System Settings → "
+                      + "Privacy & Security → Microphone.")
+            return
+        }
+    }
+
+    /// Wires a session to the chat, routing and Esc, and makes it the one the controls drive. Before `start()`, so
+    /// its first notes reach the chat; the self-test attaches one it never starts.
+    func attach(_ session: Realtime) {
         session.onEvent = { [weak self] in self?.chat.append($0) }
         session.onUserTurn = { [weak self] in self?.route($0) }
         session.audio.onSpeakingChanged = { [weak session] speaking in
             Hotkey.setStopKey(active: speaking) { session?.stopSpeech(reason: "Esc") }
         }
-        do {
-            try session.start()
-        } catch {
-            chat.note("The microphone didn't start: \(error.localizedDescription). Allow it in System Settings → "
-                      + "Privacy & Security → Microphone.")
-            return
-        }
         self.session = session
+        syncControls()
     }
 
     /// A harness that appears later (Herdr installed) or goes away is picked up when the app comes forward and once
@@ -200,12 +211,64 @@ import VoiceEngine
             tab = .settings
             return
         }
-        session.sendTyped(text)
+        session.sendTyped(text) // ends a pause or a disconnect: typing is an explicit request
+        syncControls()
     }
 
+    // MARK: session controls (the chat's control bar, the orb's menu, the menu bar and ⌥⌘M)
+
+    /// Mute always mutes, even while the session is closed (the engine's toggle would read that press as reconnect;
+    /// Connect does that here).
     func toggleMute() {
-        session?.toggleMute()
-        chat.muted = session?.muted ?? false
+        guard let session else { return }
+        session.setMuted(!session.muted)
+        syncControls()
+    }
+
+    func togglePause() {
+        guard let session else { return }
+        if session.paused { session.resume() } else { session.pause() }
+        syncControls()
+    }
+
+    func stopSpeaking() {
+        session?.stopSpeech(reason: "you pressed Stop")
+        syncControls()
+    }
+
+    /// Disconnect while the session is open or idle; otherwise Connect opens it now.
+    func toggleConnection() {
+        guard let session else { return }
+        if chat.controls.connectCloses { session.disconnect() } else { session.reconnect() }
+        syncControls()
+    }
+
+    static func controls(of session: Realtime?) -> SessionControls {
+        guard let session else { return SessionControls() }
+        let link = SessionControls.link(open: session.status != .disconnected, dormant: session.dormant,
+                                        disconnectedByUser: session.disconnectedByUser)
+        return SessionControls(available: true, link: link, muted: session.muted, paused: session.paused,
+                               speaking: session.audio.isSpeaking)
+    }
+
+    /// Copies the session's state to the controls: every orb frame, and right after a control is used.
+    func syncControls() {
+        let controls = Self.controls(of: session)
+        if chat.controls != controls { chat.controls = controls }
+    }
+
+    /// The controls as menu entries, for the orb's menu and the menu bar: the state first (disabled), then each
+    /// control under the title it has now.
+    func controlChoices() -> [(title: String, enabled: Bool, action: () -> Void)] {
+        syncControls()
+        let c = chat.controls
+        return [
+            ("Voice: \(c.state)", false, {}),
+            (c.muteTitle, c.available, { [weak self] in self?.toggleMute() }),
+            (c.pauseTitle, c.available, { [weak self] in self?.togglePause() }),
+            (SessionControls.stopTitle, c.canStopSpeaking, { [weak self] in self?.stopSpeaking() }),
+            (c.connectTitle, c.available, { [weak self] in self?.toggleConnection() }),
+        ]
     }
 
     // MARK: routing
@@ -408,15 +471,17 @@ import VoiceEngine
         self.orb = orb
     }
 
-    private func orbMenu() -> [Orb.MenuChoice] {
+    func orbMenu() -> [Orb.MenuChoice] {
         let chatShown = window?.isVisible ?? false
         var choices = [
-            Orb.MenuChoice(title: chatShown ? "Hide chat" : "Show chat", checked: false, enabled: true) { [weak self] in
-                self?.window?.toggle()
-            },
-            Orb.MenuChoice(title: chat.muted ? "Unmute" : "Mute", checked: false, enabled: session != nil,
-                           separatorAfter: true) { [weak self] in self?.toggleMute() },
+            Orb.MenuChoice(title: chatShown ? "Hide chat" : "Show chat", checked: false, enabled: true,
+                           separatorAfter: true) { [weak self] in self?.window?.toggle() },
         ]
+        let controls = controlChoices()
+        choices += controls.enumerated().map { index, control in
+            Orb.MenuChoice(title: control.title, checked: false, enabled: control.enabled,
+                           separatorAfter: index == controls.count - 1, action: control.action)
+        }
         choices += CompanionKeys.providers.map { provider in
             Orb.MenuChoice(title: provider.menuTitle, checked: provider == self.provider,
                            enabled: keys.hasKey(provider)) { [weak self] in self?.chooseProvider(provider) }
@@ -424,17 +489,15 @@ import VoiceEngine
         return choices
     }
 
-    /// Drives the orb each frame, and keeps the chat's connection and mute state current.
+    /// Drives the orb each frame, and keeps the chat's controls current. Disconnected shows offline, paused muted.
     private func frame() -> Orb.Frame {
+        syncControls()
         guard let session else { return Orb.Frame(mood: .offline, mic: 0, voice: 0, thinking: false) }
-        let audio = session.audio
-        let connected = session.status == .live
-        if chat.connected != connected { chat.connected = connected }
-        if chat.muted != session.muted { chat.muted = session.muted }
-        let mood = Activity.mood(loading: false, disconnected: session.status == .disconnected, dormant: session.dormant,
-                                 muted: session.muted, speaking: audio.isSpeaking,
-                                 agentsWorking: !session.busyAgents.isEmpty, micQuiet: audio.micLevel < 0.02)
-        return Orb.Frame(mood: mood, mic: session.muted ? 0 : audio.micLevel, voice: audio.isSpeaking ? audio.outLevel : 0,
+        let audio = session.audio, controls = chat.controls
+        let mood = Activity.mood(controls: controls, loading: false, agentsWorking: !session.busyAgents.isEmpty,
+                                 micQuiet: audio.micLevel < 0.02)
+        return Orb.Frame(mood: mood, mic: controls.listening ? audio.micLevel : 0,
+                         voice: audio.isSpeaking ? audio.outLevel : 0,
                          thinking: session.status != .disconnected && session.thinking)
     }
 
@@ -442,21 +505,50 @@ import VoiceEngine
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Voice Companion")
         let menu = NSMenu()
-        menu.addItem(ClosureMenuItem("Show Chat") { [weak self] in self?.window?.show() })
-        menu.addItem(ClosureMenuItem("Mute or Unmute (⌥⌘M)") { [weak self] in self?.toggleMute() })
-        menu.addItem(ClosureMenuItem("Skills…") { [weak self] in
-            self?.tab = .skills
-            self?.window?.show()
-        })
-        menu.addItem(ClosureMenuItem("Settings…", key: ",") { [weak self] in
-            self?.tab = .settings
-            self?.window?.show()
-        })
-        menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem("Quit Voice Companion", key: "q") { [weak self] in self?.quit() })
+        menu.autoenablesItems = false // the controls set their own (Stop speaking only while she speaks)
+        // Rebuilt each time it opens, so the controls' titles and the state line are current.
+        let rebuilder = MenuRebuilder { [weak self] menu in
+            menu.removeAllItems()
+            self?.statusMenuItems().forEach(menu.addItem)
+        }
+        menu.delegate = rebuilder
+        menuRebuilder = rebuilder
+        statusMenuItems().forEach(menu.addItem)
         item.menu = menu
         statusItem = item
     }
+
+    func statusMenuItems() -> [NSMenuItem] {
+        var items: [NSMenuItem] = [ClosureMenuItem("Show Chat") { [weak self] in self?.window?.show() }, .separator()]
+        for control in controlChoices() {
+            let item = ClosureMenuItem(control.title, control.action)
+            item.isEnabled = control.enabled
+            items.append(item)
+        }
+        items += [
+            .separator(),
+            ClosureMenuItem("Skills…") { [weak self] in
+                self?.tab = .skills
+                self?.window?.show()
+            },
+            ClosureMenuItem("Settings…", key: ",") { [weak self] in
+                self?.tab = .settings
+                self?.window?.show()
+            },
+            .separator(),
+            ClosureMenuItem("Quit Voice Companion", key: "q") { [weak self] in self?.quit() },
+        ]
+        return items
+    }
+}
+
+/// Lets a menu be rebuilt as it opens.
+@MainActor final class MenuRebuilder: NSObject, NSMenuDelegate {
+    private let rebuild: (NSMenu) -> Void
+
+    init(_ rebuild: @escaping (NSMenu) -> Void) { self.rebuild = rebuild }
+
+    func menuNeedsUpdate(_ menu: NSMenu) { rebuild(menu) }
 }
 
 /// A menu item that runs a closure.

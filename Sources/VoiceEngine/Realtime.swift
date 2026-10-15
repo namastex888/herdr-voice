@@ -46,13 +46,13 @@ import os
     /// Gemini's goAway arrived while something was still being said: renew once it's done.
     private var renewWhenIdle = false
     public private(set) var status = Status.disconnected { didSet { syncSendGate() } }
-    public private(set) var muted = false {
-        didSet {
-            syncSendGate()
-            let m = muted
-            micShared.withLock { $0.muted = m }
-        }
-    }
+    public private(set) var muted = false { didSet { syncSendGate() } }
+    /// Held by the user: the mic is off, speech is cut, and replies and agent reports wait for `resume()`.
+    public private(set) var paused = false { didSet { syncSendGate() } }
+    /// Closed by the user: speech, agent reports and retries don't reopen it; `reconnect()` or a typed message does.
+    public private(set) var disconnectedByUser = false { didSet { syncSendGate() } }
+    /// The mic is off: muted, paused, or disconnected on purpose (its speech would have nowhere to go).
+    private var micOff: Bool { muted || paused || disconnectedByUser }
     /// Tool calls made after an agent report but before the developer speaks again are not user-initiated.
     private var lastSpeechStart = Date.distantPast
     private var lastReport = Date.distantPast
@@ -162,6 +162,7 @@ import os
     }
     /// Shared between the mic queue and main.
     private struct MicShared {
+        /// The mic is off (`micOff`: muted, paused or disconnected on purpose): nothing is gated, held or sent.
         var muted = false
         /// The provider detects no speech (`explicitSpeechOnsets`): the gate marks utterances and speech events.
         var onsets = false
@@ -318,7 +319,7 @@ import os
     /// after giving up. Never while a retry is already scheduled: speech must not defeat the backoff, or every
     /// sound during an outage would hammer the provider with connects.
     private func wake() {
-        guard status == .disconnected, !muted, !retryPending, !providerPreparing else { return }
+        guard status == .disconnected, !micOff, !retryPending, !providerPreparing else { return }
         if dormant {
             dormant = false
             attempts = 0
@@ -346,6 +347,8 @@ import os
     }
 
     /// Every 5 s: close a metered session nobody has talked to for `quietClose`, if nothing is speaking or running.
+    /// A pause doesn't keep it open: its queued reports reopen the session on resume. A reply held back by the pause
+    /// (a tool's result) does, like a reply in progress, since it can only be said in this session.
     private func startQuietTimer() {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 5, repeating: 5, leeway: .seconds(1))
@@ -353,7 +356,8 @@ import os
             guard let self, self.status == .live, self.established, self.capabilities.metered else { return }
             let quietFor = Date().timeIntervalSince(self.micShared.withLock { $0.lastSpeech })
             guard quietFor > Self.quietClose, !self.responseActive, !self.audio.isSpeaking,
-                  self.toolsRunning == 0, self.outbox.isEmpty else { return }
+                  self.toolsRunning == 0, self.outbox.isEmpty || self.paused,
+                  !(self.paused && self.replies.replyWanted) else { return }
             self.goDormant("no speech for \(Int(Self.quietClose / 60)) min")
         }
         timer.resume()
@@ -373,11 +377,13 @@ import os
         awaitingCreated = false
         awaitingReplySince = nil
         micShared.withLock { $0.midTurn = false }
-        note("💤 \(why); session closed until you speak")
+        note("💤 \(why); session closed until you \(paused ? "resume" : "speak")")
     }
 
     public func connect() {
         guard !providerPreparing else { return }
+        // Closed by the user: whatever asked (a provider switch, a stray retry), it stays closed until reconnect().
+        guard !disconnectedByUser else { return note("⏏  still disconnected; Connect opens \(provider.menuTitle)") }
         retryPending = false
         dormant = false
         if Reconnect.relaunchesHelper(provider: provider, connectionLost: connectionLost), let relaunchLocalHelper {
@@ -444,6 +450,12 @@ import os
         } else if answeringYou {
             greetNext = false
         }
+        guard !paused else { return } // the outbox waits for resume()
+        flushOutbox()
+    }
+
+    /// Sends the reports that waited (offline or paused) and asks for one reply to them.
+    private func flushOutbox() {
         guard !outbox.isEmpty else { return }
         outbox.forEach(addReplyText)
         outbox.removeAll()
@@ -483,6 +495,7 @@ import os
     }
 
     private func scheduleRetry(reason: Reconnect.Reason, detail: String) {
+        guard !disconnectedByUser else { return }
         guard let delay = Reconnect.delay(reason: reason, attempt: attempts, muted: muted) else {
             note(muted ? "… \(detail); reconnects when you unmute"
                       : "✖ \(detail); gave up after \(attempts) tries, press \(Hotkey.label) to reconnect")
@@ -522,23 +535,30 @@ import os
     }
 
     /// Sends a conversation item that should get a spoken reply, or keeps it for the next session and makes sure
-    /// one is coming: an agent report is worth reopening the session for, even while muted.
+    /// one is coming: an agent report is worth reopening the session for, even while muted. Not while paused (it
+    /// waits for resume) or disconnected by the user (it waits for reconnect).
     private func deliver(_ text: String) {
-        if status == .live && established {
+        switch ReportDelivery.route(paused: paused, live: status == .live && established,
+                                    disconnected: status == .disconnected, disconnectedByUser: disconnectedByUser) {
+        case .send:
             addReplyText(text)
             if replies.wantReply() { requestResponse() } // otherwise it joins the reply already on its way
-            return
-        }
-        outbox.append(text)
-        if status == .disconnected {
+        case .hold:
+            outbox.append(text)
+        case .holdAndConnect:
+            outbox.append(text)
             attempts = 0
             connect()
         }
     }
 
+    /// The mic queue reads these two under `micShared`: whether the mic is off, and whether it may stream now.
     private func syncSendGate() {
-        let allowed = !muted && status == .live && established
-        micShared.withLock { $0.mayStream = allowed }
+        let off = micOff, allowed = !off && status == .live && established
+        micShared.withLock {
+            $0.muted = off
+            $0.mayStream = allowed
+        }
     }
 
     /// The tools to offer from the next turn on. Sent at once where the provider can swap tools mid-session;
@@ -595,6 +615,9 @@ import os
         onUserTurn?(text)
         ConfirmGate.shared.heard(text)
         if StopCommand.matches(text) { return stopSpeech(reason: "you said stop") }
+        // Typing is an explicit request, so it ends a pause or a disconnect; speech can't (the mic is off for both).
+        if paused { resume() }
+        if disconnectedByUser { reconnect() }
         deliver(text)
     }
 
@@ -613,11 +636,12 @@ import os
     }
 
     public func toggleMute() {
-        if status == .disconnected {
+        // Disconnected by the user, a press is only a mute: reopening is Connect's job.
+        if status == .disconnected && !disconnectedByUser {
             // Offline while muted means we were waiting for you: unmute and reconnect in one press.
             if muted {
                 muted = false
-                audio.setMuted(false)
+                audio.setMuted(micOff)
                 note("🎙  listening")
             }
             attempts = 0
@@ -630,17 +654,31 @@ import os
             return connect()
         }
         muted.toggle()
-        audio.setMuted(muted)
-        if muted {
-            send(.clearInput)
-            // Clearing starts a new epoch: the provider drops the reply in progress without a response.done.
-            if capabilities.turnEpochs {
-                replies.reset()
-                awaitingCreated = false
-                awaitingReplySince = nil
-            }
+        audio.setMuted(micOff)
+        if muted { clearHeardInput() }
+        note(muted ? "🔇 muted" : !micOff ? "🎙  listening" : "🎙  unmuted (still \(paused ? "paused" : "disconnected"))")
+    }
+
+    /// Drops what the provider heard but hasn't answered, as the mic goes off.
+    private func clearHeardInput() {
+        send(.clearInput)
+        // Clearing starts a new epoch: the provider drops the reply in progress without a response.done.
+        if capabilities.turnEpochs {
+            replies.reset()
+            awaitingCreated = false
+            awaitingReplySince = nil
         }
-        note(muted ? "🔇 muted" : "🎙  listening")
+    }
+
+    /// Mutes or unmutes whatever the connection is doing. `toggleMute` reads a press while offline as "reconnect",
+    /// which suits a hotkey; a Mute button has to mute. Unmuting a session that closed while muted reopens it the
+    /// way `toggleMute` does.
+    public func setMuted(_ on: Bool) {
+        guard on != muted else { return }
+        guard on, status == .disconnected else { return toggleMute() }
+        muted = true
+        audio.setMuted(micOff)
+        note("🔇 muted")
     }
 
     /// Stops the assistant mid-sentence (Esc or a spoken "stop"): cancels generation and drops queued audio.
@@ -652,6 +690,77 @@ import os
         droppingAudio = true
         cutPlayback()
         note("⏹  stopped (\(reason))")
+    }
+
+    // Session controls. Pause holds everything but keeps the connection (the quiet close still applies); a
+    // disconnect closes it and keeps it closed. The two are independent of mute and of each other.
+
+    /// Holds everything: the mic goes off, whatever is being said stops at once, and replies (`requestResponse`)
+    /// and agent reports (`deliver`) wait for `resume()`.
+    public func pause() {
+        guard !paused else { return }
+        paused = true
+        audio.setMuted(micOff)
+        stopSpeech(reason: "paused")
+        if status == .live { clearHeardInput() }
+        awaitingReplySince = nil
+        note("⏸  paused; the mic is off and replies wait until you resume")
+    }
+
+    /// Ends a pause: the mic comes back (unless muted), and what waited is said, reopening a closed session for it.
+    public func resume() {
+        guard paused else { return }
+        paused = false
+        audio.setMuted(micOff)
+        note(outbox.isEmpty ? "▶  resumed" : "▶  resumed; delivering what came in while paused")
+        if status == .live && established {
+            flushOutbox()
+            if replies.resume() { requestResponse() } // a reply held back while paused
+        } else if status == .disconnected, !outbox.isEmpty, !disconnectedByUser, !retryPending {
+            attempts = 0
+            connect()
+        }
+    }
+
+    /// Closes the session now, so its billing stops, and keeps it closed: speech, agent reports and retries don't
+    /// reopen it (`connect`, `wake`, `deliver`, `scheduleRetry`), only `reconnect()` or a typed message. Reports
+    /// that arrive meanwhile wait in the outbox for the next session.
+    public func disconnect() {
+        guard !disconnectedByUser else { return }
+        disconnectedByUser = true
+        connection += 1 // a scheduled retry, or a tool result, belongs to the session being closed
+        retryPending = false
+        renewWhenIdle = false
+        dormant = false
+        if let s = socket {
+            socket = nil // its close must not count as a failure
+            s.cancel(with: .normalClosure, reason: nil)
+        }
+        keepalive?.cancel()
+        keepalive = nil
+        if audio.isSpeaking { _ = audio.interrupt() } // the voice stops with its session
+        droppingAudio = false
+        status = .disconnected
+        replies.reset()
+        awaitingCreated = false
+        awaitingReplySince = nil
+        audio.setMuted(micOff)
+        micShared.withLock {
+            $0.midTurn = false
+            $0.held.reset() // speech from before the disconnect isn't replayed into the next session
+        }
+        note("⏏  disconnected; stays closed until you connect or type")
+    }
+
+    /// Opens the session now: after `disconnect()`, or instead of waiting for speech (closed while quiet) or for a
+    /// scheduled retry. Reports held meanwhile are delivered once it's up.
+    public func reconnect() {
+        disconnectedByUser = false
+        audio.setMuted(micOff)
+        guard status == .disconnected else { return }
+        attempts = 0
+        guard !providerPreparing else { return note("… connects once \(provider.menuTitle) is ready") }
+        connect()
     }
 
     private func enforce(_ verdict: SpeechPolicy.Verdict) {
@@ -727,6 +836,9 @@ import os
         case .sessionReady:
             break
         case .audioDelta(let item, let b64):
+            // Paused: nothing is voiced, even from a reply whose cancel crossed a response.created that reset
+            // droppingAudio.
+            if paused { return }
             if !droppingAudio { enforce(policy.audio(base64Count: b64.utf8.count)) }
             if !droppingAudio { audio.play(base64: b64, item: item) }
         case .responseCreated:
@@ -917,6 +1029,8 @@ import os
     }
 
     private func requestResponse() {
+        // Paused: the reply stays wanted and goes out on resume(). Gemini's pending outputs and texts wait with it.
+        if paused { return replies.withhold() }
         if wire.capabilities.explicitReplies {
             awaitingCreated = true
             send(.requestReply)

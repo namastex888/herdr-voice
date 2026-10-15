@@ -47,6 +47,13 @@ public struct ResponseScheduler: Sendable {
     /// The session is up again and may need to send what was wanted meanwhile.
     public mutating func resume() -> Bool { takeIfReady() }
 
+    /// The reply just taken can't go out yet (the session is paused): it stays wanted with nothing active, so
+    /// `resume()` takes it later.
+    public mutating func withhold() {
+        responseActive = false
+        replyWanted = true
+    }
+
     private mutating func takeIfReady() -> Bool {
         guard replyWanted, !responseActive, callsInFlight == 0 else { return false }
         replyWanted = false
