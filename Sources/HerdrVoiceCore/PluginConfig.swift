@@ -47,7 +47,7 @@ public enum PluginConfig {
     # Keep the orb in the screen corner instead of on the Herdr window
     # HERDR_VOICE_ORB_PIN=0
     # Gemini Live model
-    # HERDR_VOICE_GEMINI_MODEL=gemini-2.5-flash-native-audio-latest
+    # HERDR_VOICE_GEMINI_MODEL=gemini-3.8-live
     # Local OpenLive source runtime (after scripts/local-openlive-setup)
     # HERDR_VOICE_LOCAL_OPENLIVE_DIR=/absolute/path/to/herdr-voice/local-openlive
     # Local brain defaults: loopback Ollama /v1/chat/completions, Qwen 3.5 4B, reasoning disabled

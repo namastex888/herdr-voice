@@ -15,9 +15,9 @@ import Foundation
 public final class GeminiLiveWire: Wire {
     public static let endpoint =
         "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
-    /// Verified live (setup, speech in, tool calls, spoken replies, resumption). Newer Live models such as
-    /// `gemini-3.8-live` need a plan with quota for them; pick one with HERDR_VOICE_GEMINI_MODEL.
-    public static let defaultModel = "gemini-2.5-flash-native-audio-latest"
+    /// Google's recommended Live model (stable). The 2.5 native-audio preview it replaces is closed to new users; an
+    /// older or extended-thinking model can still be picked with HERDR_VOICE_GEMINI_MODEL.
+    public static let defaultModel = "gemini-3.8-live"
     /// Output audio is played at 24 kHz; input is sent at 24 kHz and resampled by Gemini.
     public static let inputMimeType = "audio/pcm;rate=24000"
 

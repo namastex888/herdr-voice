@@ -346,7 +346,7 @@ an environment variable set some other way still wins.
 | `XAI_API_KEY` | | Grok key, if it isn't in the Keychain (see [API keys](#api-keys)) |
 | `OPENAI_API_KEY` | | OpenAI key, if it isn't in the Keychain |
 | `GEMINI_API_KEY` | | Gemini key, if it isn't in the Keychain |
-| `HERDR_VOICE_GEMINI_MODEL` | `gemini-2.5-flash-native-audio-latest` | Gemini Live model, e.g. `gemini-3.8-live` if your plan has quota for it |
+| `HERDR_VOICE_GEMINI_MODEL` | `gemini-3.8-live` | Gemini Live model, e.g. `gemini-3.8-live-extended-thinking` for more reasoning |
 | `HERDR_VOICE_VOICE` | `eve` (Grok), `marin` (OpenAI), `Kore` (Gemini) | Voice ID for the provider herdr-voice starts with; models switched to from the orb's menu use their own default voice |
 | `HERDR_VOICE_HOTKEY_KEYCODE` | `46` (M) | macOS virtual key code for the mute hotkey; modifiers stay `⌥⌘` |
 | `HERDR_VOICE_DEBUG_KEYS` | off | `1` logs when `Esc` is grabbed and released |
@@ -437,9 +437,9 @@ starts with its own default voice and a short recap of the conversation. Models 
 
 | Provider | Model | Endpoint |
 |---|---|---|
-| Grok | `grok-voice-latest` | `wss://api.x.ai/v1/realtime` |
+| Grok | `grok-voice-3.0` | `wss://api.x.ai/v1/realtime` |
 | OpenAI | `gpt-realtime-2.1` | `wss://api.openai.com/v1/realtime` |
-| Gemini | `gemini-2.5-flash-native-audio-latest` (override with `HERDR_VOICE_GEMINI_MODEL`) | Gemini Live (`BidiGenerateContent` WebSocket) |
+| Gemini | `gemini-3.8-live` (override with `HERDR_VOICE_GEMINI_MODEL`) | Gemini Live (`BidiGenerateContent` WebSocket) |
 
 All three bill by audio (per minute or per token); check their pricing pages. With Grok, the voice can also search the
 web on its own ("what's the latest version of Swift?").

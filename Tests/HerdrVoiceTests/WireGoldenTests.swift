@@ -12,7 +12,7 @@ private func sha(_ obj: [String: Any]) -> String {
 }
 
 @Test("setup message is byte-identical to the shipping build", arguments: [
-    (Provider.openai, "5b23a3000817d1f88798a5521fedcd7cc6039d9e1b6f656ae19d1997b87346fb"),
+    (Provider.openai, "a022f5c3f4db68f3d8f585e911120d1bc1a1bd4e34be3c366f8612fb4f2c5e91"), // transcription: gpt-transcribe
     (Provider.grok, "10ad0d4bfe0c876c370dd7ff6366a43dec38a917134bfa276ee3f596a0a3ce5b"),
 ])
 func setupGolden(provider: Provider, expected: String) {

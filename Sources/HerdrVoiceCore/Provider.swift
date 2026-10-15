@@ -7,7 +7,7 @@ public enum Provider: String, CaseIterable {
         switch self {
         case .local: URL(string: "ws://127.0.0.1:1")!
         case .openai: URL(string: "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1")!
-        case .grok: URL(string: "wss://api.x.ai/v1/realtime?model=grok-voice-latest")!
+        case .grok: URL(string: "wss://api.x.ai/v1/realtime?model=grok-voice-3.0")!
         case .gemini: URL(string: GeminiLiveWire.endpoint)!
         }
     }
@@ -129,7 +129,7 @@ public enum Provider: String, CaseIterable {
                 "audio": [
                     "input": [
                         "format": pcm,
-                        "transcription": ["model": "gpt-4o-mini-transcribe"],
+                        "transcription": ["model": "gpt-transcribe"],
                         "turn_detection": ["type": "semantic_vad", "create_response": true, "interrupt_response": true],
                     ],
                     "output": ["format": pcm, "voice": voice],
