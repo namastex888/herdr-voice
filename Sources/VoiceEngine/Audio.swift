@@ -11,7 +11,7 @@ import os
 ///
 /// Three threads use it: main (start, play, interrupt, playback state), `micQueue` (conversion and `onMic`) and
 /// the audio I/O threads (the sink and the player tap). The levels cross all three, so they live under `levels`.
-final class Audio: @unchecked Sendable {
+public final class Audio: @unchecked Sendable {
     /// Whether voice processing is used at all.
     let echoCancel: Bool
 
@@ -24,11 +24,11 @@ final class Audio: @unchecked Sendable {
     private var chunker: DispatchSourceTimer?
     private let micQueue = DispatchQueue(label: "herdr-voice.mic", qos: .userInitiated)
 
-    init(echoCancel: Bool = ProcessInfo.processInfo.environment["HERDR_VOICE_ECHO_CANCEL"] != "0") {
+    public init(echoCancel: Bool = ProcessInfo.processInfo.environment["HERDR_VOICE_ECHO_CANCEL"] != "0") {
         self.echoCancel = echoCancel
     }
 
-    static let rate = 24000.0
+    public static let rate = 24000.0
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private let pcm24k = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: rate, channels: 1, interleaved: true)!
@@ -36,10 +36,10 @@ final class Audio: @unchecked Sendable {
     private var converter: AVAudioConverter?
 
     /// Called on the mic queue every 20 ms with base64 PCM16 24 kHz mono and the chunk's rms level.
-    var onMic: (@Sendable (String, Float) -> Void)?
+    public var onMic: (@Sendable (String, Float) -> Void)?
     private let levels = OSAllocatedUnfairLock(initialState: (mic: Float(0), out: Float(0)))
-    var micLevel: Float { levels.withLock { $0.mic } }
-    var outLevel: Float { levels.withLock { $0.out } }
+    public var micLevel: Float { levels.withLock { $0.mic } }
+    public var outLevel: Float { levels.withLock { $0.out } }
 
     // Playback is tracked by buffer completion callbacks: the player's sample clock keeps running while idle,
     // so comparing it with queued samples misreports whether anything is audible.
@@ -48,10 +48,10 @@ final class Audio: @unchecked Sendable {
     private var generation = 0
     /// Called on main when playback starts or stops, so Esc can be grabbed and released on the transition
     /// instead of being polled every frame.
-    @MainActor var onSpeakingChanged: ((Bool) -> Void)?
+    @MainActor public var onSpeakingChanged: ((Bool) -> Void)?
 
     /// Nonisolated on purpose, though called from main: the sink and tap blocks made here run on audio threads.
-    func start() throws {
+    public func start() throws {
         // Voice processing fails with -10875 unless the output side exists first.
         _ = engine.mainMixerNode
         let input = engine.inputNode
@@ -131,13 +131,13 @@ final class Audio: @unchecked Sendable {
 
     /// While muted nothing from the mic is sent, so the echo canceller has no work worth doing. Playback keeps
     /// running (you still hear the voice), which is why the engine stays up and voice processing is only bypassed.
-    @MainActor func setMuted(_ muted: Bool) {
+    @MainActor public func setMuted(_ muted: Bool) {
         guard echoCancel else { return }
         engine.inputNode.isVoiceProcessingBypassed = muted
     }
 
     /// Queues one base64 PCM16 chunk of assistant audio.
-    @MainActor func play(base64: String, item: String) {
+    @MainActor public func play(base64: String, item: String) {
         guard let data = Data(base64Encoded: base64), !data.isEmpty else { return }
         let frames = data.count / 2
         guard let buf = AVAudioPCMBuffer(pcmFormat: float24k, frameCapacity: AVAudioFrameCount(frames)) else { return }
@@ -161,10 +161,10 @@ final class Audio: @unchecked Sendable {
         }
     }
 
-    @MainActor var isSpeaking: Bool { playback.isSpeaking }
+    @MainActor public var isSpeaking: Bool { playback.isSpeaking }
 
     /// Stops playback and returns how many ms of the current item were heard, for conversation.item.truncate.
-    @MainActor func interrupt() -> (item: String, heardMs: Int)? {
+    @MainActor public func interrupt() -> (item: String, heardMs: Int)? {
         let heard = playback.interrupt(sampleRate: Int(Audio.rate))
         generation += 1
         if heard != nil { onSpeakingChanged?(false) }

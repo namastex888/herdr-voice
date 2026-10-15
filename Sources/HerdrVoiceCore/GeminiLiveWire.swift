@@ -41,7 +41,8 @@ public final class GeminiLiveWire: Wire, @unchecked Sendable {
     // MARK: encoding
 
     /// The setup message. Kept in one place: it's where Gemini's API shape could still shift.
-    public func setupMessage(instructions: String, voice: String, resumeHandle: String?) -> [String: Any] {
+    public func setupMessage(instructions: String, voice: String, resumeHandle: String?,
+                             tools: [[String: Any]] = HerdrTools.schemas) -> [String: Any] {
         var resumption: [String: Any] = [:]
         if let resumeHandle { resumption["handle"] = resumeHandle }
         return ["setup": [
@@ -51,7 +52,7 @@ public final class GeminiLiveWire: Wire, @unchecked Sendable {
                 "speechConfig": ["voiceConfig": ["prebuiltVoiceConfig": ["voiceName": voice]]],
             ] as [String: Any],
             "systemInstruction": ["parts": [["text": instructions]]],
-            "tools": Self.tools(),
+            "tools": Self.tools(tools),
             "inputAudioTranscription": [String: Any](),
             "outputAudioTranscription": [String: Any](),
             // Without compression audio sessions stop at 15 minutes.
@@ -61,9 +62,9 @@ public final class GeminiLiveWire: Wire, @unchecked Sendable {
         ] as [String: Any]]
     }
 
-    /// herdr-voice's tools as Gemini function declarations (JSON Schema passed as-is), plus Google Search.
-    static func tools() -> [[String: Any]] {
-        let declarations: [[String: Any]] = HerdrTools.schemas.compactMap { tool in
+    /// The session's tools as Gemini function declarations (JSON Schema passed as-is), plus Google Search.
+    static func tools(_ schemas: [[String: Any]] = HerdrTools.schemas) -> [[String: Any]] {
+        let declarations: [[String: Any]] = schemas.compactMap { tool in
             guard let name = tool["name"] as? String else { return nil }
             var d: [String: Any] = ["name": name]
             if let description = tool["description"] { d["description"] = description }
@@ -75,8 +76,11 @@ public final class GeminiLiveWire: Wire, @unchecked Sendable {
 
     public func encode(_ command: WireCommand) -> [[String: Any]] {
         switch command {
-        case let .setup(instructions, voice, resumeHandle):
-            return [setupMessage(instructions: instructions, voice: voice, resumeHandle: resumeHandle)]
+        case .updateTools:
+            return [] // Gemini Live takes tools only in the setup message
+        case let .setup(instructions, voice, resumeHandle, tools):
+            return [setupMessage(instructions: instructions, voice: voice, resumeHandle: resumeHandle,
+                                 tools: tools?.definitions ?? HerdrTools.schemas)]
         case .inputStarted:
             return []
         case .appendAudio(let b64):

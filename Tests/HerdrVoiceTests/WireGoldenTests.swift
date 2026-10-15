@@ -76,7 +76,23 @@ func commandGoldens(provider: Provider) {
     for (command, expected) in cases {
         #expect(wire.encode(command).map(json) == expected.map(json), "\(command)")
     }
-    #expect(wire.capabilities == WireCapabilities(explicitReplies: true, nativeResumption: false))
+    #expect(wire.capabilities == WireCapabilities(explicitReplies: true, nativeResumption: false, dynamicTools: true))
+}
+
+@Test("tools can be narrowed mid-session where the provider allows it")
+func toolUpdates() {
+    let one = ToolList([["type": "function", "name": "open_app", "description": "d", "parameters": ["type": "object"]]])
+    #expect(OpenAIRealtimeWire(provider: .openai).encode(.updateTools(one)).map(json)
+            == [json(["type": "session.update", "session": ["type": "realtime", "tools": one.definitions, "tool_choice": "auto"]])])
+    // Grok keeps its own web search alongside whatever tools are routed in.
+    #expect(OpenAIRealtimeWire(provider: .grok).encode(.updateTools(one)).map(json)
+            == [json(["type": "session.update", "session": ["tools": one.definitions + [["type": "web_search"]]]])])
+    // Gemini Live and the local bridge take tools only at setup.
+    #expect(GeminiLiveWire().encode(.updateTools(one)).isEmpty && !GeminiLiveWire().capabilities.dynamicTools)
+    #expect(LocalWire().encode(.updateTools(one)).isEmpty && !LocalWire().capabilities.dynamicTools)
+    // A setup can carry the routed tools instead of every Herdr tool.
+    let setup = OpenAIRealtimeWire(provider: .openai).encode(.setup(instructions: "I", voice: "V", resumeHandle: nil, tools: one))
+    #expect(((setup.first?["session"] as? [String: Any])?["tools"] as? [[String: Any]])?.count == 1)
 }
 
 @Test("OpenAI/xAI connect with the same bearer header as before", arguments: [Provider.openai, Provider.grok])

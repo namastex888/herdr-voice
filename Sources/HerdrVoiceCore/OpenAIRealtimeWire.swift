@@ -9,12 +9,17 @@ public final class OpenAIRealtimeWire: Wire, Sendable {
         self.provider = provider
     }
 
-    public var capabilities: WireCapabilities { WireCapabilities(explicitReplies: true, nativeResumption: false) }
+    public var capabilities: WireCapabilities {
+        WireCapabilities(explicitReplies: true, nativeResumption: false, dynamicTools: true)
+    }
 
     public func encode(_ command: WireCommand) -> [[String: Any]] {
         switch command {
-        case let .setup(instructions, voice, _):
-            return [provider.sessionUpdate(instructions: instructions, voice: voice)]
+        case let .setup(instructions, voice, _, tools):
+            return [provider.sessionUpdate(instructions: instructions, voice: voice,
+                                           tools: tools?.definitions ?? HerdrTools.schemas)]
+        case .updateTools(let tools):
+            return [provider.toolsUpdate(tools.definitions)]
         case .inputStarted:
             return []
         case .appendAudio(let b64):

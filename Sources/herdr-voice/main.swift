@@ -1,5 +1,6 @@
 import AppKit
 import HerdrVoiceCore
+import VoiceEngine
 
 // ponytail: Swift 5 language mode with main-queue confinement instead of actors; move to Swift 6 strict
 // concurrency if the session grows more shared state.

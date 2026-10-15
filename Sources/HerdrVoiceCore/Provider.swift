@@ -115,12 +115,13 @@ public enum Provider: String, CaseIterable, Sendable {
 
     /// The two providers share event names but nest session fields differently:
     /// OpenAI GA puts voice/VAD under `audio`, xAI keeps them at the session root.
-    public func sessionUpdate(instructions: String, voice: String) -> [String: Any] {
+    public func sessionUpdate(instructions: String, voice: String,
+                              tools: [[String: Any]] = HerdrTools.schemas) -> [String: Any] {
         let pcm: [String: Any] = ["type": "audio/pcm", "rate": 24000]
-        var tools = HerdrTools.schemas
+        var tools = tools
         switch self {
         case .local:
-            return LocalWire.sessionUpdate(instructions: instructions, voice: voice)
+            return LocalWire.sessionUpdate(instructions: instructions, voice: voice, tools: tools)
         case .openai:
             return ["type": "session.update", "session": [
                 "type": "realtime",
@@ -147,7 +148,17 @@ public enum Provider: String, CaseIterable, Sendable {
                 "tools": tools,
             ] as [String: Any]]
         case .gemini:
-            return GeminiLiveWire().setupMessage(instructions: instructions, voice: voice, resumeHandle: nil)
+            return GeminiLiveWire().setupMessage(instructions: instructions, voice: voice, resumeHandle: nil, tools: tools)
+        }
+    }
+
+    /// Replaces a live session's tools (OpenAI and Grok; see `WireCapabilities.dynamicTools`).
+    public func toolsUpdate(_ tools: [[String: Any]]) -> [String: Any] {
+        switch self {
+        case .grok:
+            return ["type": "session.update", "session": ["tools": tools + [["type": "web_search"]]] as [String: Any]]
+        default:
+            return ["type": "session.update", "session": ["type": "realtime", "tools": tools, "tool_choice": "auto"] as [String: Any]]
         }
     }
 

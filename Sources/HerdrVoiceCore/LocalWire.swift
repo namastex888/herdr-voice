@@ -22,7 +22,7 @@ public extension HerdrTools {
         toolManifest(for: schemas(includeShell: includeShell))
     }
 
-    private static func toolManifest(for definitions: [[String: Any]]) -> ToolManifest {
+    static func toolManifest(for definitions: [[String: Any]]) -> ToolManifest {
         let names = definitions.compactMap { $0["name"] as? String }
         let data = (try? JSONSerialization.data(withJSONObject: definitions,
                                                 options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data()
@@ -49,13 +49,14 @@ public final class LocalWire: Wire, @unchecked Sendable { // epoch and utterance
         lock.withLock { candidate == epoch }
     }
 
-    public static func sessionUpdate(instructions: String, voice: String) -> [String: Any] {
-        let manifest = HerdrTools.toolManifest
+    public static func sessionUpdate(instructions: String, voice: String,
+                                     tools: [[String: Any]] = HerdrTools.schemas) -> [String: Any] {
+        let manifest = HerdrTools.toolManifest(for: tools)
         return ["type": "session.update", "session": [
             "protocol_version": 1,
             "instructions": instructions,
             "voice": voice,
-            "tools": HerdrTools.schemas,
+            "tools": tools,
             "tool_manifest": [
                 "profile": manifest.profile.name,
                 "count": manifest.profile.count,
@@ -69,8 +70,10 @@ public final class LocalWire: Wire, @unchecked Sendable { // epoch and utterance
         lock.lock()
         defer { lock.unlock() }
         switch command {
-        case .setup(let instructions, let voice, _):
-            return [Self.sessionUpdate(instructions: instructions, voice: voice)]
+        case .setup(let instructions, let voice, _, let tools):
+            return [Self.sessionUpdate(instructions: instructions, voice: voice, tools: tools?.definitions ?? HerdrTools.schemas)]
+        case .updateTools:
+            return [] // the bridge validates its tool manifest once, at the handshake
         case .inputStarted(let id):
             epoch += 1
             utteranceID = id

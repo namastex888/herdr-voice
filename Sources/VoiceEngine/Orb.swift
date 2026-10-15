@@ -6,8 +6,8 @@ import QuartzCore
 /// falls back to the bottom-left corner of the active screen, above full-screen apps and on every Space.
 /// Inside, soft colour blobs drift on out-of-phase paths. Two voices drive it differently:
 /// the developer's mic pushes the blobs and glow outward, the assistant's speech glows from the core.
-@MainActor final class Orb {
-    typealias Mood = HerdrVoiceCore.Mood
+@MainActor public final class Orb {
+    public typealias Mood = HerdrVoiceCore.Mood
 
     /// Per-blob motion: two incommensurate frequencies per axis, so paths never visibly repeat.
     private struct Blob {
@@ -44,11 +44,18 @@ import QuartzCore
     private var thinking = false
 
     /// One frame's inputs: the mood, raw 0...1 loudness of mic and playback, and whether anything is working.
-    struct Frame {
-        let mood: Mood
-        let mic: Float
-        let voice: Float
-        let thinking: Bool
+    public struct Frame {
+        public let mood: Mood
+        public let mic: Float
+        public let voice: Float
+        public let thinking: Bool
+
+        public init(mood: Mood, mic: Float, voice: Float, thinking: Bool) {
+            self.mood = mood
+            self.mic = mic
+            self.voice = voice
+            self.thinking = thinking
+        }
     }
 
     private let view: ClickView
@@ -57,15 +64,15 @@ import QuartzCore
     private var idle = false
 
     /// One entry in the right-click menu above Quit (the AI models).
-    struct MenuChoice {
-        let title: String
-        let checked: Bool
-        let enabled: Bool
+    public struct MenuChoice {
+        public let title: String
+        public let checked: Bool
+        public let enabled: Bool
         /// Draw a separator line after this entry.
-        var separatorAfter = false
+        public var separatorAfter = false
         let action: () -> Void
 
-        init(title: String, checked: Bool, enabled: Bool, separatorAfter: Bool = false, action: @escaping () -> Void) {
+        public init(title: String, checked: Bool, enabled: Bool, separatorAfter: Bool = false, action: @escaping () -> Void) {
             self.title = title
             self.checked = checked
             self.enabled = enabled
@@ -76,7 +83,7 @@ import QuartzCore
 
     /// `onClick` for a plain click (mute); `menuChoices` is asked for fresh entries each time the right-click menu
     /// opens (so the checkmark and key availability are current); `onQuit` for its Quit item.
-    init(onClick: @escaping () -> Void, menuChoices: @escaping () -> [MenuChoice] = { [] },
+    public init(onClick: @escaping () -> Void, menuChoices: @escaping () -> [MenuChoice] = { [] },
          onQuit: @escaping () -> Void = { NSApp.terminate(nil) }) {
         let s = Orb.size
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: s, height: s),
@@ -195,7 +202,7 @@ import QuartzCore
     private var inCorner = true
 
     /// Sits just inside the bottom-left of `window` (AppKit coordinates), or hides when nil.
-    func follow(_ window: NSRect?) {
+    public func follow(_ window: NSRect?) {
         inCorner = false
         guard let w = window else {
             wantsVisible = false
@@ -223,7 +230,7 @@ import QuartzCore
     }
 
     /// Fallback when there is no Herdr window to follow: the screen corner, always visible.
-    func showInScreenCorner() {
+    public func showInScreenCorner() {
         wantsVisible = true
         guard !inCorner || !panel.isVisible else { return }
         inCorner = true
@@ -240,7 +247,7 @@ import QuartzCore
     /// Drives the orb from a display link instead of a 60 Hz timer: frames follow the display, drop to 30 fps
     /// while idle, run in `.common` mode (not paused by menu tracking), and stop entirely while the panel is
     /// hidden, which AppKit does for us (measured: 62/s visible, 32/s at the idle rate, 0/s ordered out).
-    func run(_ frame: @escaping () -> Frame) {
+    public func run(_ frame: @escaping () -> Frame) {
         // A timer, not the display link: the link stops while the panel is hidden, which is exactly when this matters.
         let watchdog = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.reassert() } // added to the main run loop below
@@ -269,7 +276,7 @@ import QuartzCore
 
     /// Called every frame with the current mood, raw 0...1 loudness of the mic and of the assistant's playback,
     /// and whether anything is working (voice model processing, a tool call, or a coding agent).
-    func update(_ newMood: Mood, mic: Float, voice: Float, thinking: Bool) {
+    public func update(_ newMood: Mood, mic: Float, voice: Float, thinking: Bool) {
         setThinking(thinking && newMood != .offline)
         let now = CACurrentMediaTime()
         let dt = CGFloat(min(now - last, 0.1))

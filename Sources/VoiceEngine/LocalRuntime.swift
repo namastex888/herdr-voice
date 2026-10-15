@@ -4,11 +4,11 @@ import os
 import Security
 
 /// One owned Electron inference host. Its session token and optional brain key travel over stdin, never argv.
-final class LocalRuntime: @unchecked Sendable { // process, input and generation live under `lifecycle`
-    struct Ready {
-        let request: URLRequest
-        let label: String
-        let probe: [String: Any]
+public final class LocalRuntime: @unchecked Sendable { // process, input and generation live under `lifecycle`
+    public struct Ready {
+        public let request: URLRequest
+        public let label: String
+        public let probe: [String: Any]
     }
 
     enum RuntimeError: LocalizedError {
@@ -26,7 +26,9 @@ final class LocalRuntime: @unchecked Sendable { // process, input and generation
     private let lifecycle = NSLock()
     private var generation = 0
 
-    func prepare(environment: [String: String] = ProcessInfo.processInfo.environment,
+    public init() {}
+
+    public func prepare(environment: [String: String] = ProcessInfo.processInfo.environment,
                  setup: Bool = false) throws -> Ready {
         let operation = beginPreparation()
         let root = try Self.runtimeRoot(environment: environment)
@@ -143,7 +145,7 @@ final class LocalRuntime: @unchecked Sendable { // process, input and generation
     }
 
     /// Whether setup has run: Electron, the built main and the model inventory exist. Only stats files.
-    static func isBuilt(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+    public static func isBuilt(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
         guard let root = try? runtimeRoot(environment: environment) else { return false }
         let files = FileManager.default
         return files.isExecutableFile(atPath: root.appendingPathComponent("node_modules/.bin/electron").path)
@@ -166,7 +168,7 @@ final class LocalRuntime: @unchecked Sendable { // process, input and generation
         }
     }
 
-    func stop() {
+    public func stop() {
         lifecycle.lock()
         generation += 1
         let pipe = input

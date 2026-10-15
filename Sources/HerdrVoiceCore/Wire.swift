@@ -3,8 +3,11 @@ import Foundation
 /// What the session asks a provider for, independent of the provider's wire protocol. `Realtime` only speaks
 /// in these commands and in `ServerEvent`s; a `Wire` turns them into and out of that provider's messages.
 public enum WireCommand: Sendable {
-    /// The first message on a connection. `resumeHandle` resumes a previous session where supported.
-    case setup(instructions: String, voice: String, resumeHandle: String?)
+    /// The first message on a connection. `resumeHandle` resumes a previous session where supported. `tools`
+    /// defaults to every Herdr tool.
+    case setup(instructions: String, voice: String, resumeHandle: String?, tools: ToolList? = nil)
+    /// Replaces the session's tools mid-session (only where `capabilities.dynamicTools`).
+    case updateTools(ToolList)
     /// A locally verified microphone onset. Cloud providers continue to use server VAD and ignore this command.
     case inputStarted(utteranceID: String)
     /// 20 ms of mic audio, base64 PCM16 24 kHz mono.
@@ -48,6 +51,8 @@ public struct WireCapabilities: Equatable, Sendable {
     public let explicitReplies: Bool
     /// The provider resumes a session from a handle with its context intact, so no recap is needed.
     public let nativeResumption: Bool
+    /// Tools can be swapped mid-session (`updateTools`); otherwise a session keeps the tools it was set up with.
+    public var dynamicTools = false
 }
 
 /// One provider's wire protocol. A new instance is made per connection; `decode` may keep state across messages.

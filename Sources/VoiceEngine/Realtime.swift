@@ -5,14 +5,25 @@ import os
 /// One realtime voice session: streams mic audio up, plays assistant audio, runs Herdr tools.
 /// Main-actor state, except the mic path (`micChunk`), which runs on the mic queue every 20 ms. It reaches only
 /// `micShared`, `micLocal`, `audio` and constants, and streams through the socket `micShared` holds for it.
-@MainActor final class Realtime {
-    enum Status { case connecting, live, disconnected }
+@MainActor public final class Realtime {
+    public enum Status { case connecting, live, disconnected }
 
-    private(set) var provider: Provider
+    /// What tools run through: every Herdr tool for the plugin, the skill registry for the companion.
+    private let host: ToolHost
+    /// The voice's standing instructions, sent with every setup.
+    private let instructions: String
+    /// The tools offered now: the host's, or the narrower set routed for the current turn (see `setTools`).
+    private var tools: ToolList
+    /// What the session is doing, for a UI: both sides of the conversation, tool calls and status lines.
+    public var onEvent: ((SessionEvent) -> Void)?
+    /// Each of the user's turns, spoken or typed, as soon as its text is known (the companion routes skills on it).
+    public var onUserTurn: ((String) -> Void)?
+
+    public private(set) var provider: Provider
     private var key: String
     private var voice: String
     private var requestOverride: URLRequest?
-    nonisolated let audio = Audio()
+    nonisolated public let audio = Audio()
     private var socket: URLSessionWebSocketTask?
     /// The provider's wire protocol for the current connection (see Wire). Replaced on every connect.
     private var wire: Wire
@@ -26,8 +37,8 @@ import os
     private var pendingTexts: [String] = []
     /// Gemini's goAway arrived while something was still being said: renew once it's done.
     private var renewWhenIdle = false
-    private(set) var status = Status.disconnected { didSet { syncSendGate() } }
-    private(set) var muted = false {
+    public private(set) var status = Status.disconnected { didSet { syncSendGate() } }
+    public private(set) var muted = false {
         didSet {
             syncSendGate()
             let m = muted
@@ -38,7 +49,7 @@ import os
     private var lastSpeechStart = Date.distantPast
     private var lastReport = Date.distantPast
     /// Agents currently being watched in the background.
-    private(set) var busyAgents = Set<String>()
+    public private(set) var busyAgents = Set<String>()
     /// Pane watches running in the background. Unlike busy agents they don't count as work: a watch can wait an
     /// hour for a dev server, and the orb shouldn't churn or the session stay open all that time.
     private var watchedPanes = Set<String>()
@@ -59,7 +70,7 @@ import os
 
     /// Something is actively working: the voice model processing (between your speech and its voice, or
     /// between tool steps), a Herdr tool call running, or a coding agent busy with work you sent.
-    var thinking: Bool {
+    public var thinking: Bool {
         Activity.isThinking(awaitingReplySince: awaitingReplySince, now: Date(), responseActive: responseActive,
                             speaking: audio.isSpeaking, droppingAudio: droppingAudio,
                             toolsRunning: toolsRunning, busyAgents: busyAgents.count)
@@ -163,22 +174,26 @@ import os
     }
     private nonisolated let micShared = OSAllocatedUnfairLock(initialState: MicShared())
     /// Closed on purpose because nobody was talking; any speech (or an agent report) reopens it.
-    private(set) var dormant = false
+    public private(set) var dormant = false
     /// A reconnect is already scheduled by the backoff.
     private var retryPending = false
-    private(set) var providerPreparing = false
+    public private(set) var providerPreparing = false
     /// Local mode: the helper's connection was lost, so its port is dead and the next connect relaunches it.
     private var connectionLost = false
     /// Relaunches the Local OpenLive helper off the main queue, then calls completeProviderSwitch with its new port,
     /// or localRelaunchFailed.
-    var relaunchLocalHelper: (() -> Void)?
+    public var relaunchLocalHelper: (() -> Void)?
     private var quietTimer: DispatchSourceTimer?
 
-    init(provider: Provider, key: String, voice: String, request: URLRequest? = nil) {
+    public init(provider: Provider, key: String, voice: String, request: URLRequest? = nil,
+                host: ToolHost = HerdrToolHost(), instructions: String = voiceInstructions) {
         self.provider = provider
         self.key = key
         self.voice = voice
         self.requestOverride = request
+        self.host = host
+        self.instructions = instructions
+        self.tools = host.tools
         // Local with no runtime yet: stay closed until completeProviderSwitch brings the loaded runtime's request.
         self.providerPreparing = provider == .local && request == nil
         self.wire = provider.makeWire()
@@ -188,7 +203,7 @@ import os
         audio.onMic = { [weak self] b64, level in self?.micChunk(b64, level: level) }
     }
 
-    func start() throws {
+    public func start() throws {
         try audio.start()
         if !providerPreparing { connect() }
         if gated { startQuietTimer() }
@@ -290,7 +305,7 @@ import os
         if dormant {
             dormant = false
             attempts = 0
-            log("🎙  heard you; reopening the session")
+            note("🎙  heard you; reopening the session")
         }
         connect()
     }
@@ -341,10 +356,10 @@ import os
         awaitingCreated = false
         awaitingReplySince = nil
         micShared.withLock { $0.midTurn = false }
-        log("💤 \(why); session closed until you speak")
+        note("💤 \(why); session closed until you speak")
     }
 
-    func connect() {
+    public func connect() {
         guard !providerPreparing else { return }
         retryPending = false
         dormant = false
@@ -352,7 +367,7 @@ import os
             connectionLost = false
             providerPreparing = true
             requestOverride = nil
-            log("↻ relaunching Local OpenLive")
+            note("↻ relaunching Local OpenLive")
             return relaunchLocalHelper()
         }
         micShared.withLock { $0.midTurn = false }
@@ -375,12 +390,14 @@ import os
         task.resume()
         let handle = wire.capabilities.nativeResumption ? resumeHandle : nil
         resumedWithContext = handle != nil
-        send(.setup(instructions: voiceInstructions, voice: voice, resumeHandle: handle))
+        // A provider that can't swap tools later starts with all of them.
+        let offered = wire.capabilities.dynamicTools ? tools : host.tools
+        send(.setup(instructions: instructions, voice: voice, resumeHandle: handle, tools: offered))
         status = .live
         if hadSession || attempts > 0 {
-            log("↻ reconnecting to \(provider.rawValue)")
+            note("↻ reconnecting to \(provider.rawValue)")
         } else {
-            log("● connecting to \(provider.rawValue) — speak any time, \(Hotkey.label) mutes, Esc stops speech")
+            note("● connecting to \(provider.rawValue) — speak any time, \(Hotkey.label) mutes, Esc stops speech")
         }
         receive(task)
         startKeepalive(task)
@@ -388,7 +405,7 @@ import os
 
     /// The first server event on a socket: the session is really up.
     private func sessionEstablished() {
-        log(hadSession ? "↻ reconnected" : "● connected")
+        note(hadSession ? "↻ reconnected" : "● connected")
         // Speech held while the session reopened goes first, before live audio starts flowing.
         let heardDuringHandshake = activateHeldAudio()
         established = true
@@ -429,14 +446,14 @@ import os
         // The provider closed a quiet session: nothing to reconnect for until someone speaks.
         if gated && reason == .sessionEnded && !muted {
             dormant = true
-            log("💤 \(detail); reopens when you speak")
+            note("💤 \(detail); reopens when you speak")
             return
         }
         scheduleRetry(reason: reason, detail: detail)
     }
 
     /// The helper relaunch failed: counts as a failed attempt and backs off like a drop.
-    func localRelaunchFailed(_ detail: String) {
+    public func localRelaunchFailed(_ detail: String) {
         providerPreparing = false
         connectionLost = true
         attempts += 1
@@ -445,11 +462,11 @@ import os
 
     private func scheduleRetry(reason: Reconnect.Reason, detail: String) {
         guard let delay = Reconnect.delay(reason: reason, attempt: attempts, muted: muted) else {
-            log(muted ? "… \(detail); reconnects when you unmute"
+            note(muted ? "… \(detail); reconnects when you unmute"
                       : "✖ \(detail); gave up after \(attempts) tries, press \(Hotkey.label) to reconnect")
             return
         }
-        log(delay == 0 ? "↻ \(detail)" : "↻ \(detail); reconnecting in \(Int(delay)) s")
+        note(delay == 0 ? "↻ \(detail)" : "↻ \(detail); reconnecting in \(Int(delay)) s")
         let id = connection
         retryPending = true
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -502,27 +519,56 @@ import os
         micShared.withLock { $0.mayStream = allowed }
     }
 
+    /// The tools to offer from the next turn on. Sent at once where the provider can swap tools mid-session;
+    /// elsewhere the session keeps everything the host offers.
+    public func setTools(_ list: ToolList) {
+        tools = list
+        guard wire.capabilities.dynamicTools, status == .live, established else { return }
+        send(.updateTools(list))
+    }
+
+    /// A message typed into a chat. It is the user's own words, like speech: it counts as theirs for tool
+    /// provenance, can answer a pending confirmation, and reopens a closed session.
+    public func sendTyped(_ text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        lastSpeechStart = Date()
+        log("you:   \(text)")
+        recap.add("you", text)
+        onEvent?(.you(text))
+        onUserTurn?(text)
+        ConfirmGate.shared.heard(text)
+        if StopCommand.matches(text) { return stopSpeech(reason: "you said stop") }
+        deliver(text)
+    }
+
+    /// Logs a status line and shows it in a UI.
+    private func note(_ line: String) {
+        log(line)
+        onEvent?(.note(line))
+    }
+
     /// Closes the provider session cleanly so billing stops at once; call before exiting.
-    func shutdown() {
-        log("👋 herdr-voice closed")
+    public func shutdown() {
+        note("👋 herdr-voice closed")
         guard let s = socket else { return }
         socket = nil
         s.cancel(with: .normalClosure, reason: nil)
     }
 
-    func toggleMute() {
+    public func toggleMute() {
         if status == .disconnected {
             // Offline while muted means we were waiting for you: unmute and reconnect in one press.
             if muted {
                 muted = false
                 audio.setMuted(false)
-                log("🎙  listening")
+                note("🎙  listening")
             }
             attempts = 0
             if gated {
                 // No need to pay for a session before you say something.
                 dormant = true
-                log("🎙  listening; the session opens when you speak")
+                note("🎙  listening; the session opens when you speak")
                 return
             }
             return connect()
@@ -537,18 +583,18 @@ import os
                 awaitingReplySince = nil
             }
         }
-        log(muted ? "🔇 muted" : "🎙  listening")
+        note(muted ? "🔇 muted" : "🎙  listening")
     }
 
     /// Stops the assistant mid-sentence (Esc or a spoken "stop"): cancels generation and drops queued audio.
-    func stopSpeech(reason: String) {
+    public func stopSpeech(reason: String) {
         guard responseActive || audio.isSpeaking else { return }
         if responseActive { send(.cancelReply) }
         replies.reset()
         awaitingCreated = false
         droppingAudio = true
         cutPlayback()
-        log("⏹  stopped (\(reason))")
+        note("⏹  stopped (\(reason))")
     }
 
     private func enforce(_ verdict: SpeechPolicy.Verdict) {
@@ -561,12 +607,12 @@ import os
             replies.reset()
             awaitingCreated = false
             droppingAudio = true
-            log("✂  cut after \(Int(SpeechPolicy.maxAudioSeconds)) s of speech")
+            note("✂  cut after \(Int(SpeechPolicy.maxAudioSeconds)) s of speech")
         case .leak(let what):
             // Cutting here would land mid-word, seconds before the audio catches up with the transcript. Let the
             // reply finish (the audio cap still bounds it) and correct the model afterwards.
             leaked = what
-            log("⚠  the voice read \(what) aloud; it will be told not to")
+            note("⚠  the voice read \(what) aloud; it will be told not to")
         }
     }
 
@@ -639,16 +685,21 @@ import os
         case .assistantTranscript(let t):
             log("voice: \(t)")
             recap.add("voice", t)
+            onEvent?(.voice(t))
         case .assistantTranscriptItem(let itemID, let t):
             log("voice: \(t)")
             recap.add("voice", t, itemID: itemID)
+            onEvent?(.voice(t))
         case .assistantTranscriptTruncated(let itemID, let t):
             recap.replace(itemID: itemID, speaker: "voice", with: t)
         case .userTranscript(let t):
-            log("you:   \(t.trimmingCharacters(in: .whitespacesAndNewlines))")
+            let said = t.trimmingCharacters(in: .whitespacesAndNewlines)
+            log("you:   \(said)")
             recap.add("you", t)
+            onEvent?(.you(said))
+            if !said.isEmpty { onUserTurn?(said) }
             if speechOverlappedPlayback {
-                log("… you spoke over the voice; that can't confirm anything (it may be its own echo). Say it again.")
+                note("… you spoke over the voice; that can't confirm anything (it may be its own echo). Say it again.")
             } else {
                 ConfirmGate.shared.heard(t)
             }
@@ -681,14 +732,14 @@ import os
             }
             if heard {
                 cutPlayback()
-            } else if audio.isSpeaking { log("… kept talking: the mic didn't hear you (echo or noise)") }
+            } else if audio.isSpeaking { note("… kept talking: the mic didn't hear you (echo or noise)") }
         case .functionCall(let callID, let name, let args):
             runTool(callID: callID, name: name, args: args, epoch: nil)
         case .localFunctionCall(let epoch, let callID, let name, let args):
             runTool(callID: callID, name: name, args: args, epoch: epoch)
         case .error(let msg):
             if provider == .local, !established {
-                log("✖ Local OpenLive handshake failed: \(msg)")
+                note("✖ Local OpenLive handshake failed: \(msg)")
                 let failed = socket
                 socket = nil
                 failed?.cancel(with: .protocolError, reason: nil)
@@ -702,7 +753,7 @@ import os
                 return
             }
             // A provider ending the session (idle, time limit) is routine: note it and let the close renew it.
-            if Reconnect.isSessionEnd(msg) { closeReason = .sessionEnded } else { log("✖ \(msg)") }
+            if Reconnect.isSessionEnd(msg) { closeReason = .sessionEnded } else { note("✖ \(msg)") }
             // A refused response.create would otherwise leave the scheduler waiting forever.
             if awaitingCreated {
                 awaitingCreated = false
@@ -733,7 +784,7 @@ import os
     /// the new one opens at once and gets the recap, so the conversation carries over. Tool results meant for the
     /// old session are dropped (its calls can't be answered elsewhere); agent reports still arrive in the new one.
     @discardableResult
-    func beginProviderSwitch(to newProvider: Provider, voice newVoice: String) -> Bool {
+    public func beginProviderSwitch(to newProvider: Provider, voice newVoice: String) -> Bool {
         if newProvider == provider {
             guard provider == .local, status == .disconnected else { return false }
             connection += 1 // invalidate a retry aimed at the old sidecar port
@@ -742,7 +793,7 @@ import os
             requestOverride = nil
             return true
         }
-        log("⇄ switching to \(newProvider.menuTitle) (voice \(newVoice))")
+        note("⇄ switching to \(newProvider.menuTitle) (voice \(newVoice))")
         if let old = socket {
             socket = nil // its close must not count as a failure
             old.cancel(with: .normalClosure, reason: nil)
@@ -773,7 +824,7 @@ import os
         return true
     }
 
-    func completeProviderSwitch(key newKey: String, request: URLRequest? = nil) {
+    public func completeProviderSwitch(key newKey: String, request: URLRequest? = nil) {
         providerPreparing = false
         connectionLost = false
         key = newKey
@@ -781,7 +832,7 @@ import os
         connect()
     }
 
-    func switchProvider(to newProvider: Provider, key newKey: String, voice newVoice: String,
+    public func switchProvider(to newProvider: Provider, key newKey: String, voice newVoice: String,
                         request: URLRequest? = nil) {
         guard newProvider != provider else { return }
         guard beginProviderSwitch(to: newProvider, voice: newVoice) else { return }
@@ -792,7 +843,7 @@ import os
     private func renewConnection() {
         renewWhenIdle = false
         guard status == .live, let old = socket else { return }
-        log("↻ renewing the connection (the provider limits how long one lasts)")
+        note("↻ renewing the connection (the provider limits how long one lasts)")
         socket = nil // its close must not count as a failure
         old.cancel(with: .normalClosure, reason: nil)
         keepalive?.cancel()
@@ -853,7 +904,7 @@ import os
             return
         }
         guard deduper.admit(name: name, arguments: args) else {
-            log("⤫ \(name) repeated within seconds; not run again")
+            note("⤫ \(name) repeated within seconds; not run again")
             addToolOutput(ToolOutput(callID: callID, name: name,
                                      output: "Duplicate of a call made moments ago; it was not run again. Don't repeat calls.",
                                      epoch: epoch))
@@ -866,14 +917,17 @@ import os
         if name == "run_shell", let cmd = Self.field(args, "command") {
             log("   $ \(cmd)")   // the exact command the developer is being asked to approve
         }
+        onEvent?(.toolCall(name: name, arguments: args))
         // Speech start comes from the mic via server VAD, so an injected report can't fake it.
         let userInitiated = lastSpeechStart > lastReport
         toolsRunning += 1
         let id = connection
+        let host = host
         DispatchQueue.global().async {
-            let outcome = HerdrTools.call(name, arguments: args, userInitiated: userInitiated)
+            let outcome = host.call(name, arguments: args, userInitiated: userInitiated)
             DispatchQueue.main.async {
                 self.toolsRunning -= 1
+                self.onEvent?(.toolResult(name: name, output: outcome.output))
                 if let target = outcome.watch { self.watch(target) }
                 if let pane = outcome.paneWatch { self.watchPane(pane) }
                 // A result for a call from a session that has since closed has nowhere to go.
@@ -894,10 +948,10 @@ import os
 
     private func watch(_ target: String) {
         guard busyAgents.insert(target).inserted else { return }
-        HerdrTools.settle(target) { report in
+        host.settle(target) { report in
             DispatchQueue.main.async {
                 self.busyAgents.remove(target)
-                log("← \(target) settled")
+                self.note("← \(target) settled")
                 self.lastReport = Date()
                 self.deliver("[herdr] " + report)
             }
@@ -907,11 +961,11 @@ import os
     private func watchPane(_ w: HerdrTools.PaneWatch) {
         let key = w.pane + "\u{0}" + w.regex
         guard watchedPanes.insert(key).inserted else { return }
-        log("👁  watching \(w.label) for \(w.awaited)")
-        HerdrTools.watchPane(w) { report in
+        note("👁  watching \(w.label) for \(w.awaited)")
+        host.watchPane(w) { report in
             DispatchQueue.main.async {
                 self.watchedPanes.remove(key)
-                log("← \(w.label) watch ended")
+                self.note("← \(w.label) watch ended")
                 self.lastReport = Date()
                 self.deliver("[herdr] " + report)
             }
@@ -953,14 +1007,14 @@ import os
                     // Failures on a socket that never came up, or has since been replaced, are already reported by
                     // the reconnect logic; only a live session's send errors are news.
                     guard let self, self.connection == id, self.established else { return }
-                    log("✖ send: \(err.localizedDescription)")
+                    self.note("✖ send: \(err.localizedDescription)")
                 }
             }
         }
     }
 }
 
-func log(_ line: String) {
+public func log(_ line: String) {
     print(line)
     fflush(stdout)
 }
