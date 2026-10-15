@@ -129,6 +129,13 @@ struct OrbView: View {
                          with: .radialGradient(Gradient(colors: [colors[0].opacity(dim ? 0.22 : 0.45 + energy * 0.3),
                                                                  colors[1].opacity(0)]),
                                                center: c, startRadius: 0, endRadius: glowR))
+            if f.listening {
+                // Listening: a bright halo in the accent, unmistakable from across the screen.
+                let haloR = diameter * (0.86 + f.mic * 0.24)
+                context.fill(Path(ellipseIn: CGRect(x: c.x - haloR, y: c.y - haloR, width: haloR * 2, height: haloR * 2)),
+                             with: .radialGradient(Gradient(colors: [theme.primary.opacity(0.7), theme.primary.opacity(0)]),
+                                                   center: c, startRadius: r * 0.9, endRadius: haloR))
+            }
             let sphere = CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)
             context.drawLayer { layer in
                 layer.clip(to: Path(ellipseIn: sphere))
@@ -158,6 +165,12 @@ struct OrbView: View {
                 layer.fill(Path(ellipseIn: spot), with: .radialGradient(
                     Gradient(colors: [.white.opacity(0.32), .white.opacity(0)]),
                     center: CGPoint(x: spot.midX, y: spot.midY), startRadius: 0, endRadius: spot.width / 2))
+            }
+            if f.listening {
+                let pulse = 0.5 + 0.5 * sin(f.time * 2.6)
+                let ringR = r * (1.14 + f.mic * 0.16)
+                context.stroke(Path(ellipseIn: CGRect(x: c.x - ringR, y: c.y - ringR, width: ringR * 2, height: ringR * 2)),
+                               with: .color(theme.primary.blend(.white, 0.35).opacity(0.6 + 0.35 * pulse)), lineWidth: 2.5)
             }
             if f.thinking {
                 // Three dots at the lower right, like the plugin's thought bubble.
@@ -294,7 +307,7 @@ struct StatusBar: View {
     }
 }
 
-/// The navigation handle: home, or back to the orb from home.
+/// The navigation handle: back to the orb (the drawer up first, if it's down).
 struct GestureBar: View {
     let action: () -> Void
     @Environment(\.phoneTheme) private var theme
@@ -305,7 +318,7 @@ struct GestureBar: View {
             .contentShape(Rectangle())
             .onTapGesture(perform: action)
             .gesture(DragGesture(minimumDistance: 6).onEnded { if $0.translation.height < -8 { action() } })
-            .help("Home; from home, back to the orb")
+            .help("Back to the orb")
     }
 }
 

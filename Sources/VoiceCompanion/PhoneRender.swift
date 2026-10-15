@@ -17,7 +17,8 @@ import VoiceEngine
 
     /// Every screen, the orb, a frame of the morph between them, and a conversation's sheet.
     static func shots(appID: String?) -> [Shot] {
-        let listening = LiveLevels.Frame(look: .mood(.listening), mic: 0.55, voice: 0, thinking: false, time: 2.3)
+        let listening = LiveLevels.Frame(look: .mood(.listening), mic: 0.55, voice: 0, thinking: false, listening: true,
+                                         time: 2.3)
         var shots = [
             Shot(name: "orb", morph: 0, frame: LiveLevels.Frame(look: .resting, time: 1.4)),
             Shot(name: "orb-listening", morph: 0, frame: listening),

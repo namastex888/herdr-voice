@@ -103,6 +103,7 @@ import VoiceEngine
     let session = checkSessionControls(controller, check)
     checkActivation(controller, session, check)
     checkVoiceControl(controller, session, gate, check)
+    checkVoiceMode(controller, session, gate, check)
 
     window.panel.orderOut(nil)
     print(failures == 0 ? "all checks passed" : "\(failures) check(s) failed")
@@ -311,6 +312,69 @@ import VoiceEngine
     check("switching the model or the shell on by voice still needs your spoken yes",
           model.hasPrefix("CONFIRMATION REQUIRED") && shell.hasPrefix("CONFIRMATION REQUIRED")
               && controller.settings.provider == nil && registry.tree["harness.shell"]?.disabled == true, model)
+}
+
+/// Voice mode: a tap lights the orb without the phone; the phone rises for what she shows or asks, and goes back
+/// into the orb by itself (a shown result a few seconds after she's quiet, the conversation's end, another app taking
+/// focus), never while her question waits for a yes; the gesture bar and Esc put it away too. Fake clock throughout.
+@MainActor private func checkVoiceMode(_ controller: CompanionController, _ session: Realtime, _ gate: ConfirmGate,
+                                       _ check: (String, Bool, String) -> Void) {
+    let registry = controller.registry
+    let t = Date()
+    func at(_ seconds: TimeInterval) -> Date { t.addingTimeInterval(seconds) }
+    func show(_ screen: String) { _ = registry.call("show_screen", arguments: json(["screen": screen]), userInitiated: true) }
+    controller.collapsePhone()
+    controller.activation(.reset)
+
+    controller.activation(.tap, at: at(0))
+    controller.updateLive(at: at(0))
+    check("a tap lights the orb's listening glow and leaves the phone down",
+          !controller.phone.expanded && controller.live.frame.listening && !controller.conversation.isIdle,
+          "\(controller.conversation)")
+
+    show("home")
+    let shown = controller.phone.expanded && controller.phoneReason == .shown
+    controller.tickMinimizer(at: at(1), busy: true) // she's still talking about it
+    controller.tickMinimizer(at: at(8), busy: true)
+    controller.tickMinimizer(at: at(9), busy: false)
+    controller.tickMinimizer(at: at(12.5), busy: false)
+    let lingered = controller.phone.expanded
+    controller.tickMinimizer(at: at(13.2), busy: false)
+    check("what she shows rises, then goes back into the orb about 4 s after she's quiet",
+          shown && lingered && !controller.phone.expanded && controller.phoneReason == nil, "")
+
+    show("home")
+    controller.phoneTouched()
+    controller.tickMinimizer(at: at(30), busy: false)
+    let kept = controller.phone.expanded
+    controller.otherAppFocused()
+    check("a result you touched stays; another app taking focus puts it away", kept && !controller.phone.expanded, "")
+
+    show("home")
+    controller.activation(.dismiss, at: at(31))
+    check("the conversation's end puts away what she showed", !controller.phone.expanded && controller.conversation.isIdle,
+          "\(controller.conversation)")
+
+    let ask = registry.call("set_model", arguments: json(["provider": "openai"]), userInitiated: true).output
+    controller.sessionSaid(.toolResult(name: "set_model", output: ask))
+    let asked = controller.phone.expanded && controller.phone.screen == .messages && controller.phoneReason == .question
+    controller.tickMinimizer(at: at(40), busy: false)
+    controller.otherAppFocused()
+    controller.hideConversation()
+    let held = controller.phone.expanded
+    gate.heard("no")
+    controller.tickMinimizer(at: at(60), busy: false)
+    controller.tickMinimizer(at: at(64.5), busy: false)
+    check("her question opens the conversation and holds the phone up until it's answered",
+          asked && held && !controller.phone.expanded, ask.prefix(40).description)
+
+    controller.openPhone(.home, activate: false)
+    controller.gestureBarTapped()
+    let barred = !controller.phone.expanded
+    controller.openPhone(.home, activate: false)
+    controller.escapeInPhone()
+    check("the gesture bar and Esc put the phone back into the orb", barred && !controller.phone.expanded, "")
+    controller.activation(.reset)
 }
 
 private func json(_ object: [String: Any]) -> String {

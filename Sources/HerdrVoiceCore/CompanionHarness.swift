@@ -313,7 +313,9 @@ public struct CompanionHarness: Harness {
                           + "user connects, taps or types.", ["confirmed": confirmed], []),
             HerdrTools.fn("stop_speaking", "Stop what she is saying.", ["confirmed": confirmed], []),
             HerdrTools.fn("show_screen", "Open the phone on a screen: home, messages, settings, skills, shade (quick "
-                          + "settings and notifications) or lock.",
+                          + "settings and notifications) or lock. A tap only lights the orb; open the phone only when "
+                          + "there is something to see (a list, a link, a result), and it goes away by itself a few "
+                          + "seconds after you finish talking about it.",
                           ["screen": ["type": "string", "enum": screens], "confirmed": confirmed], ["screen"]),
             HerdrTools.fn("collapse_phone", "Put the phone away, back to the orb.", ["confirmed": confirmed], []),
             HerdrTools.fn("set_activation", "How she listens: tapToTalk (tap the key, the default and cheapest), wakeWord "

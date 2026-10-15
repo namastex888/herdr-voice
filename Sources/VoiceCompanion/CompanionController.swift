@@ -91,8 +91,13 @@ import VoiceEngine
     @Published var handsFree = false
     /// The activation key can't be watched (no Input Monitoring) or the wake word can't listen: what she does instead.
     @Published var activationNote = ""
-    /// The conversation opened the phone, so its end puts it away again.
-    var openedByActivation = false
+    /// When the phone goes back into the orb by itself (see VoiceMode.swift), and why it's up, for the views.
+    var minimizer = AutoMinimize()
+    @Published var phoneReason: AutoMinimize.Reason?
+    /// Watches for another app taking focus and for clicks in the phone.
+    var voiceModeObservers: [Any] = []
+    /// Where her questions wait for the user's own yes: while one waits, the phone stays up.
+    let gate: ConfirmGate
 
     /// `store` is where `config.json` lives; the first time it is built from 0.1.0's settings (`legacyDefaults`) and
     /// skills folder. nil keeps the configuration in memory. `gate` holds proposals until the human's own yes.
@@ -100,6 +105,7 @@ import VoiceEngine
          store: CompanionStore? = CompanionStore(directory: CompanionStore.defaultDirectory),
          legacyDefaults: UserDefaults? = .standard, gate: ConfirmGate = .shared) {
         self.keys = keys
+        self.gate = gate
         configDirectory = store?.directory
         // Her own app's controls (the companion harness) run here, through the bridge, on the same gate the
         // session's heard words go to.
@@ -165,6 +171,7 @@ import VoiceEngine
         phoneWindow = window
         window.onFocusChange = { [weak self] in self?.updateEscape() }
         device.start()
+        watchFocusAndTouches()
         installStatusItem()
         window.showOrb()
         startFrames()
@@ -206,7 +213,10 @@ import VoiceEngine
     /// Wires a session to the chat, routing and Esc, and makes it the one the controls drive. Before `start()`, so
     /// its first notes reach the chat; the self-test attaches one it never starts.
     func attach(_ session: Realtime) {
-        session.onEvent = { [weak self] in self?.chat.append($0) }
+        session.onEvent = { [weak self] event in
+            self?.chat.append(event)
+            self?.sessionSaid(event)
+        }
         session.onUserTurn = { [weak self] in self?.userSaid($0) }
         session.onSpeech = { [weak self] started in self?.activation(started ? .speechStarted : .speechStopped) }
         session.audio.onSpeakingChanged = { [weak self] _ in self?.updateEscape() }

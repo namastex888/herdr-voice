@@ -58,10 +58,10 @@ extension CompanionController {
             return "Done."
         case .show(let name):
             if name == "shade" {
-                openPhone(phone.expanded ? nil : .home, activate: false)
+                openPhone(phone.expanded ? nil : .home, activate: false, reason: .shown)
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { phone.shadeOpen = true }
             } else {
-                openPhone(PhoneScreen.named[name] ?? .home, activate: false)
+                openPhone(PhoneScreen.named[name] ?? .home, activate: false, reason: .shown)
             }
             return "Done: showing \(name)."
         case .collapse:
