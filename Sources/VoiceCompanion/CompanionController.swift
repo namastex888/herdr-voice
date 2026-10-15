@@ -108,13 +108,19 @@ import VoiceEngine
     let agents: AgentsWatcher
     /// Where the detail charts' days come from.
     let history = CockpitHistory()
+    /// Spans to the user's Phoenix: each turn, tool call, delegation and connected stretch.
+    let phoenix: PhoenixExporter
+    /// The self-test's Phoenix, instead of the one in her configuration.
+    private let phoenixOverride: PhoenixConfig?
 
     /// `store` is where `config.json` lives; the first time it is built from 0.1.0's settings (`legacyDefaults`) and
     /// skills folder. nil keeps the configuration in memory. `gate` holds proposals until the human's own yes.
     init(keys: CompanionKeys = CompanionKeys(),
          store: CompanionStore? = CompanionStore(directory: CompanionStore.defaultDirectory),
-         legacyDefaults: UserDefaults? = .standard, gate: ConfirmGate = .shared, home: VoxHome = .user) {
+         legacyDefaults: UserDefaults? = .standard, gate: ConfirmGate = .shared, home: VoxHome = .user,
+         phoenix override: PhoenixConfig? = nil) {
         self.keys = keys
+        phoenixOverride = override
         self.gate = gate
         self.home = home
         recorder = ConversationRecorder(store: ConversationStore(root: home.conversations))
@@ -133,6 +139,9 @@ import VoiceEngine
                                        .map { String(decoding: $0, as: UTF8.self) } ?? "{}"
                                    return registry.call("focus", arguments: args, userInitiated: true).output
                                })
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        phoenix = PhoenixExporter(config: override ?? PhoenixConfig(registry.tree["settings"]?.config["phoenix"]),
+                                  apiKey: keys.phoenixKey, version: version)
         tree = registry.tree
         reload()
         provider = chosenProvider()
@@ -142,6 +151,14 @@ import VoiceEngine
         numbers.provider = provider
         recorder.onTalk = { [weak self] side, seconds in self?.numbers.talk(side, seconds: seconds) }
         recorder.onConversation = { [weak self] in self?.numbers.conversationStarted() }
+        numbers.onTurn = { [weak self] turn in
+            guard let self else { return }
+            self.phoenix.export(TurnSpans.spans(turn, session: self.recorder.conversationID))
+        }
+        numbers.onConnection = { [weak self] stretch in self?.phoenix.export([TurnSpans.connection(stretch)]) }
+        history.config = { [weak self] in self?.phoenixConfig ?? PhoenixConfig() }
+        let keys = keys
+        history.apiKey = { keys.phoenixKey }
         agents.onAgentTime = { [weak self] seconds in self?.numbers.agentTime(seconds) }
         agents.onWorking = { [weak self] count in self?.numbers.agentsWorking(count) }
         agents.watched = { [weak self] in
@@ -177,6 +194,22 @@ import VoiceEngine
         let set = identity("userName").trimmingCharacters(in: .whitespaces)
         if !set.isEmpty { return set }
         return NSFullUserName().split(separator: " ").first.map(String.init) ?? NSUserName()
+    }
+
+    /// Where her spans go (`settings.phoenix`).
+    var phoenixConfig: PhoenixConfig { phoenixOverride ?? PhoenixConfig(tree["settings"]?.config["phoenix"]) }
+
+    /// Changes where her spans go, as the user's own edit.
+    func setPhoenix(_ change: (inout PhoenixConfig) -> Void) {
+        var next = phoenixConfig
+        change(&next)
+        guard next != phoenixConfig else { return }
+        edit { try registry.setField("settings", "phoenix", next.json) }
+    }
+
+    func savePhoenixKey(_ raw: String) {
+        notice = keys.savePhoenixKey(raw) ? "Saved the Phoenix key." : "That doesn't look like a key."
+        phoenix.configure(phoenixConfig, apiKey: keys.phoenixKey)
     }
 
     /// What the cockpit shows (`settings.dashboard`).
@@ -314,6 +347,7 @@ import VoiceEngine
 
     func quit() {
         numbers.flush()
+        phoenix.flush()
         session?.shutdown()
         // A moment for the WebSocket close frame to go out.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
@@ -446,6 +480,10 @@ import VoiceEngine
         reload()
         let after = settings
         followAccent()
+        if before.phoenix != after.phoenix {
+            phoenix.configure(phoenixConfig, apiKey: keys.phoenixKey)
+            history.forget()
+        }
         if after.routeWithJev != before.routeWithJev || after.jevModel != before.jevModel { refreshRouter() }
         if after.activation != before.activation || after.activationKey != before.activationKey
             || after.followUpSeconds != before.followUpSeconds || after.wakePhrase != before.wakePhrase {

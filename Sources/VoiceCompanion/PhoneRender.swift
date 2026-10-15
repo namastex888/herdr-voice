@@ -85,7 +85,8 @@ import VoiceEngine
     defer { try? FileManager.default.removeItem(at: scratch) }
     let controller = CompanionController(store: CompanionStore(directory: scratch), legacyDefaults: nil,
                                          gate: ConfirmGate(minDelay: 0, wait: 0),
-                                         home: VoxHome(root: scratch.appendingPathComponent("vox")))
+                                         home: VoxHome(root: scratch.appendingPathComponent("vox")),
+                                         phoenix: PhoenixConfig(enabled: false))
     stageDemo(controller)
     let folder = URL(fileURLWithPath: directory)
     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

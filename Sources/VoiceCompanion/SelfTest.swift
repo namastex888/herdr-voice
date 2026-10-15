@@ -22,8 +22,10 @@ import VoiceEngine
     defer { try? FileManager.default.removeItem(at: scratch) }
     // Its own gate, answering at once: the user's "no" below clears each question before the next is asked.
     let gate = ConfirmGate(minDelay: 0, wait: 0)
+    // Phoenix on a closed port: sends fail fast and are dropped, and nothing reaches the user's Phoenix.
     let controller = CompanionController(store: CompanionStore(directory: scratch), legacyDefaults: nil, gate: gate,
-                                         home: VoxHome(root: scratch.appendingPathComponent("vox")))
+                                         home: VoxHome(root: scratch.appendingPathComponent("vox")),
+                                         phoenix: PhoenixConfig(endpoint: "http://127.0.0.1:9"))
     let registry = controller.registry
 
     let window = PhoneWindow(model: controller.phone, content: PhoneRoot(controller: controller, model: controller.phone,
@@ -104,6 +106,7 @@ import VoiceEngine
     checkVoiceControl(controller, session, gate, check)
     checkVoiceMode(controller, session, gate, check)
     checkMetrics(controller, session, check)
+    checkPhoenix(controller, check)
     checkVoiceChat(controller, check)
     checkCockpit(controller, check)
     checkPhone(controller, window, check)
@@ -345,6 +348,49 @@ import VoiceEngine
               && abs(cost - (1000 * 32 + 500 * 64) / 1_000_000) < 1e-9 && saved == after,
           String(format: "%d turns, $%.4f, %.0f ms", after.turns, after.totalCost, after.averageLatencyMs ?? -1))
     numbers.provider = provider
+}
+
+/// The Phoenix export is failure-tolerant: the scripted turn above was queued as spans without the voice waiting,
+/// the send to a Phoenix that isn't there is dropped, and the detail charts fall back to the local numbers.
+@MainActor private func checkPhoenix(_ controller: CompanionController, _ check: (String, Bool, String) -> Void) {
+    let numbers = controller.numbers, phoenix = controller.phoenix
+    func flushed() -> PhoenixExporter.Outcome? {
+        let done = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var outcome: PhoenixExporter.Outcome?
+        phoenix.flush { result in
+            outcome = result
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + 8)
+        return outcome
+    }
+    _ = flushed() // what the checks above exported
+    let droppedBefore = phoenix.droppedSpans
+    // A connected stretch of a minute-billed model, then a turn on OpenAI.
+    numbers.provider = .grok
+    let base = Date().addingTimeInterval(10) // after the fake clock of the metrics check
+    for step in 0...4 { numbers.frame(at: base.addingTimeInterval(Double(step) * 0.4), connected: true, busy: false) }
+    numbers.frame(at: base.addingTimeInterval(2), connected: false, busy: false) // the link drops: one connection span
+    numbers.provider = .openai
+    numbers.speech(started: true, interrupting: false)
+    numbers.speech(started: false, interrupting: false)
+    numbers.replyAudio()
+    let started = Date()
+    numbers.flush() // the turn ends and goes to the exporter
+    let handedOver = Date().timeIntervalSince(started)
+    let outcome = flushed()
+    // The turn (turn and reply spans) and the connection span: three spans, sent once and dropped.
+    check("a turn and a connected stretch go to Phoenix without the voice waiting; a failed send is dropped, not retried",
+          handedOver < 0.05 && outcome?.ok == false && outcome?.spans == 3
+              && phoenix.droppedSpans == droppedBefore + 3 && phoenix.queuedSpans == 0,
+          String(format: "handed over in %.1f ms; %@; %d dropped", handedOver * 1000, outcome?.detail ?? "no send",
+                 phoenix.droppedSpans))
+
+    controller.history.refresh()
+    let deadline = Date().addingTimeInterval(6)
+    while controller.history.problem.isEmpty, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+    let label = controller.history.days(for: controller.numbers.snapshot.lastDays(14, endingAt: Date())).label
+    check("with Phoenix unreachable the detail charts read the local aggregate", label.hasPrefix("From this Mac"), label)
 }
 
 /// The voice chat: a spoken exchange becomes two voice notes with transcripts, saved as WAV files and a transcript

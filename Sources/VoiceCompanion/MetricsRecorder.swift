@@ -15,10 +15,14 @@ import VoiceEngine
     /// What the cockpit shows.
     @Published private(set) var snapshot: MetricsLedger
     var provider: Provider {
+        willSet { if newValue != provider { endConnection(at: Date()) } }
         didSet { turns.provider = provider }
     }
     /// Each finished turn, for the Phoenix export.
     var onTurn: ((TurnRecord) -> Void)?
+    /// Each stretch of connected time with its cost (at most `connectionSpan` long), for the Phoenix export.
+    var onConnection: ((ConnectionRecord) -> Void)?
+    static let connectionSpan: TimeInterval = 300
 
     private var ledger: MetricsLedger
     private var turns: TurnLedger
@@ -28,6 +32,8 @@ import VoiceEngine
     private var dirty = false
     /// Typed turns, whose echo as the user's words isn't a second turn.
     private var typedEchoes: [String] = []
+    /// The stretch of connected time not yet reported.
+    private var connection: ConnectionRecord?
     private let io = DispatchQueue(label: "voice-companion.metrics", qos: .utility)
 
     init(url: URL, provider: Provider, prices: PriceTable = .current) {
@@ -53,6 +59,10 @@ import VoiceEngine
                 day.addCost(prices.cost(connectedSeconds: 0, spokenSeconds: seconds, provider: provider),
                             provider: provider.rawValue, estimated: prices.row(provider)?.estimated ?? false)
             }
+        }
+        if side == .vox, connection != nil {
+            connection?.spokenSeconds += seconds
+            connection?.costUSD += prices.cost(connectedSeconds: 0, spokenSeconds: seconds, provider: provider)
         }
     }
 
@@ -125,11 +135,22 @@ import VoiceEngine
         let dt = lastFrame.map { min(max(now.timeIntervalSince($0), 0), 0.5) } ?? 0
         lastFrame = now
         if connected, dt > 0 {
+            let cost = prices.cost(connectedSeconds: dt, spokenSeconds: 0, provider: provider)
             update(now, publish: false) { day in
                 day.connectedSeconds[provider.rawValue, default: 0] += dt
-                day.addCost(prices.cost(connectedSeconds: dt, spokenSeconds: 0, provider: provider),
-                            provider: provider.rawValue, estimated: prices.row(provider)?.estimated ?? false)
+                day.addCost(cost, provider: provider.rawValue, estimated: prices.row(provider)?.estimated ?? false)
             }
+            if connection == nil {
+                connection = ConnectionRecord(provider: provider.rawValue, model: provider.model,
+                                              start: now.addingTimeInterval(-dt), end: now,
+                                              estimated: prices.row(provider)?.estimated ?? false)
+            }
+            connection?.connectedSeconds += dt
+            connection?.costUSD += cost
+            connection?.end = now
+            if let start = connection?.start, now.timeIntervalSince(start) >= Self.connectionSpan { endConnection(at: now) }
+        } else if !connected {
+            endConnection(at: now)
         }
         if let settled = turns.tick(at: now, busy: busy) { finished(settled) }
         if dirty, now.timeIntervalSince(lastPublish) >= Self.publishInterval { publish(now) }
@@ -139,11 +160,20 @@ import VoiceEngine
     /// The session closed or the app quits: the open turn ends and everything is written.
     func flush(at now: Date = Date()) {
         if let closed = turns.finish(at: now) { finished(closed) }
+        endConnection(at: now)
         publish(now)
         save(at: now)
     }
 
     // MARK: helpers
+
+    /// Reports the connected stretch so far (a drop, a provider switch, five minutes, quitting).
+    private func endConnection(at now: Date) {
+        guard var stretch = connection else { return }
+        connection = nil
+        stretch.end = max(stretch.start, min(now, stretch.end.addingTimeInterval(1)))
+        if stretch.connectedSeconds >= 1 { onConnection?(stretch) }
+    }
 
     private func finished(_ turn: TurnRecord) {
         update(turn.end) { $0.add(turn) }

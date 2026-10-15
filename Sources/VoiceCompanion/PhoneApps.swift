@@ -319,6 +319,7 @@ struct SettingsScreen: View {
                     keysCard
                     cockpit
                     prices
+                    phoenixCard
                     routing
                     look
                     reset
@@ -461,6 +462,30 @@ struct SettingsScreen: View {
                     controller.setDashboard(on ? .init(show: [item]) : .init(hide: [item]))
                 }
             }
+        }
+    }
+
+    /// Where her traces go: the user's Phoenix, its project and key.
+    private var phoenixCard: some View {
+        let config = controller.phoenixConfig
+        let status: String = {
+            guard config.enabled else { return "Off: nothing leaves this Mac." }
+            guard config.tracesURL != nil else { return "The address isn't a URL." }
+            guard let last = controller.phoenix.lastOutcome else { return "Nothing sent yet." }
+            let time = last.time.formatted(date: .omitted, time: .shortened)
+            return last.ok ? "Sent \(last.spans) spans at \(time)." : "Last send at \(time) failed (\(last.detail)); dropped."
+        }()
+        return Card(title: "Phoenix", footer: "Each turn, tool call, delegation and connected stretch goes to Phoenix as "
+                    + "OpenTelemetry spans: timings, routing, counts and cost, never your words. A send that fails is "
+                    + "dropped; the voice never waits for it.") {
+            SwitchRow(title: "Send traces to Phoenix", detail: status, isOn: config.enabled) { on in
+                controller.setPhoenix { $0.enabled = on }
+            }
+            PhoneField("Address", value: config.endpoint) { text in controller.setPhoenix { $0.endpoint = text } }
+            PhoneField("Project", value: config.project) { text in controller.setPhoenix { $0.project = text } }
+            PhoneField("API key (PHOENIX_API_KEY)\(keys.hasPhoenixKey ? " (saved)" : "")", value: "",
+                       placeholder: keys.hasPhoenixKey ? "Saved; paste to replace" : "Only if your Phoenix asks for one",
+                       secure: true) { controller.savePhoenixKey($0) }
         }
     }
 
