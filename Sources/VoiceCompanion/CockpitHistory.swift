@@ -83,10 +83,12 @@ import HerdrVoiceCore
 
     struct Failure: Error { let text: String }
 
+    /// One session for every look, so repeated refreshes don't leave sessions behind.
+    nonisolated static let session = URLSession(configuration: .ephemeral)
+
     /// Every turn and connection span since `since`, summed per day.
     nonisolated static func fetch(config: PhoenixConfig, apiKey: String?, since: Date) async -> Result<[String: DayMetrics], Failure> {
         var days: [String: DayMetrics] = [:], cursor: String?
-        let session = URLSession(configuration: .ephemeral)
         for name in ["turn", "connection"] {
             cursor = nil
             for _ in 0..<maxPages {

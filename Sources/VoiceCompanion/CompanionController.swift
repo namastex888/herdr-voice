@@ -346,7 +346,11 @@ import VoiceEngine
     }
 
     func quit() {
+        // The conversation's last notes are kept like the rest, and today's numbers written, before she goes.
+        recorder.end()
+        recorder.drain()
         numbers.flush()
+        numbers.drain()
         phoenix.flush()
         session?.shutdown()
         // A moment for the WebSocket close frame to go out.

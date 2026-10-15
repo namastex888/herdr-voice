@@ -48,6 +48,12 @@ public struct RealtimeUsage: Codable, Equatable, Sendable {
         // Without the breakdown the totals count as audio, which is what a realtime voice turn mostly is.
         if input == nil { result.inputAudioTokens = int(usage, "input_tokens") }
         if output == nil { result.outputAudioTokens = int(usage, "output_tokens") }
+        // Cached tokens without their own breakdown: text first (the instructions and tools), the rest audio.
+        let cachedTotal = int(input, "cached_tokens")
+        if cached == nil, cachedTotal > 0 {
+            result.cachedTextTokens = min(cachedTotal, result.inputTextTokens)
+            result.cachedAudioTokens = min(cachedTotal - result.cachedTextTokens, result.inputAudioTokens)
+        }
         return result
     }
 }

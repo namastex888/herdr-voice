@@ -29,6 +29,13 @@ private let responseDone = #"""
     #expect(PriceTable.current.version == "2026-10-15")
 }
 
+@Test func cachedTokensWithoutTheirBreakdownStillPriceAtTheCachedRate() throws {
+    let done = #"{"type":"response.done","response":{"usage":{"input_token_details":{"text_tokens":300,"#
+        + #""audio_tokens":700,"cached_tokens":500},"output_token_details":{"text_tokens":0,"audio_tokens":100}}}}"#
+    let usage = try #require(RealtimeUsage.fromResponseDone(done))
+    #expect(usage.cachedTextTokens == 300 && usage.cachedAudioTokens == 200)
+}
+
 @Test func theOpenAIWireReportsUsageJustBeforeTheResponseEnds() {
     let wire = OpenAIRealtimeWire(provider: .openai)
     let events = wire.decode(responseDone)
