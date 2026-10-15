@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The live provider contract, with no audio. For each provider whose key is in the Keychain (services OPENAI_API_KEY,
 # XAI_API_KEY, GEMINI_API_KEY): connect, send the real setup message with the companion's full tool list, then a
-# narrowed tool update and an instruction update where the wire supports them, and check the provider accepts each.
+# narrowed tool update, an instruction update, and the tap-to-talk turn-detection change and its undo where the wire
+# supports them, and check the provider accepts each (and echoes the turn detection it was sent).
 # Providers without a key are skipped. Prints a PASS/FAIL table; exits non-zero on any failure. Never prints a key.
 #
 # Usage: scripts/provider-contract

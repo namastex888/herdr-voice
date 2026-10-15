@@ -37,6 +37,13 @@ public final class Audio: @unchecked Sendable {
 
     /// Called on the mic queue every 20 ms with base64 PCM16 24 kHz mono and the chunk's rms level.
     public var onMic: (@Sendable (String, Float) -> Void)?
+    /// A second listener to the same mic (the companion's wake word), with each 20 ms chunk as its own 24 kHz PCM16
+    /// buffer; nil costs nothing. Set from main, called on the mic queue, so it lives under a lock.
+    private let micTap = OSAllocatedUnfairLock<(@Sendable (AVAudioPCMBuffer) -> Void)?>(initialState: nil)
+
+    public func setMicTap(_ tap: (@Sendable (AVAudioPCMBuffer) -> Void)?) {
+        micTap.withLock { $0 = tap }
+    }
     private let levels = OSAllocatedUnfairLock(initialState: (mic: Float(0), out: Float(0)))
     public var micLevel: Float { levels.withLock { $0.mic } }
     public var outLevel: Float { levels.withLock { $0.out } }
@@ -127,6 +134,12 @@ public final class Audio: @unchecked Sendable {
         }
         let data = Data(bytes: out.int16ChannelData![0], count: Int(out.frameLength) * 2)
         onMic?(data.base64EncodedString(), level)
+        // `out` is reused for the next chunk, so the tap gets a copy it may keep.
+        if let tap = micTap.withLock({ $0 }), let copy = AVAudioPCMBuffer(pcmFormat: pcm24k, frameCapacity: out.frameLength) {
+            copy.frameLength = out.frameLength
+            memcpy(copy.int16ChannelData![0], out.int16ChannelData![0], Int(out.frameLength) * 2)
+            tap(copy)
+        }
     }
 
     /// While muted nothing from the mic is sent, so the echo canceller has no work worth doing. Playback keeps

@@ -107,6 +107,9 @@ func noProposalAppliesWithoutAYes(_ index: Int) throws {
     ("removeEntry", "harness.shell", nil),
     ("addEntry", "harness.extra", .object(["harness": .string("shell")])),
     ("set", "settings.provider", .string("openai")),
+    ("set", "settings.activation", .string("alwaysOn")),
+    ("set", "settings.followUpSeconds", .number(60)),
+    ("set", "settings.wakePhrase", .string("hey you")),
     ("set", "skill.tidy.disabled", .bool(true)),
     ("set", "identity.disabled", .bool(true)),
     ("removeEntry", "identity", nil),
@@ -129,7 +132,7 @@ func humanOwnedAndUnknownPathsAreRefused(op: String, path: String, value: JSONVa
     let args: [String: Any] = ["summary": "s", "changes": [change]]
     let out = rig.registry.run("propose_change", args)
     #expect(out.hasPrefix("error:") && out.hasSuffix("Nothing changed."), "\(out)")
-    if path.hasPrefix("harness") || path.hasSuffix("disabled") || path == "settings.provider" {
+    if path.hasPrefix("harness") || path.hasSuffix("disabled") || Governance.isHumanSetting(path) {
         #expect(out.contains("the human's to change"))
     }
     #expect(rig.gate.pendingAction == nil)

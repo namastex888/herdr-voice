@@ -97,7 +97,8 @@ import VoiceEngine
     }
     check("each tab opens", window.isVisible && controller.harnesses.contains { $0.id == "harness.mac" })
 
-    checkSessionControls(controller, check)
+    let session = checkSessionControls(controller, check)
+    checkActivation(controller, session, check)
 
     window.panel.orderOut(nil)
     print(failures == 0 ? "all checks passed" : "\(failures) check(s) failed")
@@ -108,7 +109,7 @@ import VoiceEngine
 /// started: no microphone, and no network (Local without its runtime stays closed, so Connect and a typed message
 /// only clear the disconnect and leave the session to open once the runtime is up).
 @MainActor private func checkSessionControls(_ controller: CompanionController,
-                                             _ check: (String, Bool, String) -> Void) {
+                                             _ check: (String, Bool, String) -> Void) -> Realtime {
     func titles() -> [String] { controller.orbMenu().map(\.title) }
     func enabled(_ title: String) -> Bool? { controller.orbMenu().first { $0.title == title }?.enabled }
     let state = { controller.chat.controls.state }
@@ -177,6 +178,57 @@ import VoiceEngine
     check("a typed message ends a disconnect and a pause",
           !session.disconnectedByUser && !session.paused && controller.chat.lines.contains { $0.text == "are you there" },
           state())
+    return session
+}
+
+/// Tap-to-talk on the same never-started session, with made-up times: the key's prewarm and a chord's cancel, a
+/// tap, speech and the cooldown, her reply and the follow-up window running out, a double tap and Esc.
+@MainActor private func checkActivation(_ controller: CompanionController, _ session: Realtime,
+                                        _ check: (String, Bool, String) -> Void) {
+    session.deferReplies = true
+    session.setStandby(true)
+    controller.turns = TurnTaking(timing: .init(cooldown: 0.5, followUp: 8))
+    let t = Date()
+    func at(_ seconds: TimeInterval) -> Date { t.addingTimeInterval(seconds) }
+    func phase() -> String { "\(controller.conversation)" }
+
+    controller.activation(.keyDown, at: at(0))
+    let prewarmed = !session.standby
+    controller.activation(.otherKey, at: at(0.1)) // ⌘C
+    controller.activation(.keyUp, at: at(0.2))
+    check("⌘C never activates: the key's prewarm goes back to standby",
+          prewarmed && session.standby && controller.conversation == .idle, phase())
+
+    controller.activation(.keyDown, at: at(1))
+    controller.activation(.keyUp, at: at(1.1))
+    check("a tap of the key alone opens a conversation and the mic",
+          controller.conversation == .listening(heard: false, since: at(1.1)) && !session.standby && session.micOpen,
+          phase())
+
+    controller.activation(.speechStarted, at: at(1.5))
+    controller.activation(.speechStopped, at: at(3))
+    let cooling = controller.turns.cooldownProgress(at: at(3.25)) == 0.5
+    controller.activation(.speechStarted, at: at(3.2))
+    let resumed = controller.conversation == .listening(heard: true, since: at(3.2))
+    controller.activation(.speechStopped, at: at(4))
+    controller.activation(.tick, at: at(4.5))
+    check("speech, a cooldown that resumed speech cancels, then the turn is submitted",
+          cooling && resumed && controller.conversation == .replying(since: at(4.5)), phase())
+
+    controller.activation(.assistant(busy: true), at: at(5))
+    controller.activation(.assistant(busy: false), at: at(7))
+    let following = controller.turns.followUpRemaining(at: at(9)) == 0.75 && !session.standby
+    controller.activation(.tick, at: at(15))
+    check("after her reply the follow-up window runs out and the session goes back to standby",
+          following && controller.conversation == .idle && session.standby && controller.chat.controls.state != "Connected",
+          controller.chat.controls.state)
+
+    controller.activation(.tap, at: at(20))
+    controller.activation(.tap, at: at(20.2))
+    let handsFree = controller.handsFree
+    controller.escape()
+    check("a double tap is hands-free; Esc ends it and closes",
+          handsFree && !controller.handsFree && controller.conversation == .idle && session.standby, phase())
 }
 
 private func json(_ object: [String: Any]) -> String {

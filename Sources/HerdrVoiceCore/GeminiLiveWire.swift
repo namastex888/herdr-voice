@@ -100,6 +100,8 @@ public final class GeminiLiveWire: Wire, @unchecked Sendable {
             }]]]
         case .requestReply, .cancelReply, .truncate:
             return [] // implicit replies; a reply can only be stopped locally; Gemini handles barge-in itself
+        case .deferReplies, .commitInput:
+            return [] // Gemini answers every finished turn by itself
         }
     }
 

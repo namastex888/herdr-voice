@@ -49,6 +49,36 @@ struct SettingsView: View {
                     Button("Add", action: addFact).disabled(factDraft.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
+            Section {
+                Picker("Mode", selection: Binding(get: { controller.settings.activation },
+                                                  set: { controller.setActivation($0) })) {
+                    ForEach(ActivationMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                Text(controller.settings.activation.detail).font(.caption).foregroundStyle(.secondary)
+                if controller.settings.activation.opensOnRequest {
+                    Picker("Key", selection: Binding(get: { controller.settings.activationKey },
+                                                     set: { controller.setActivationKey($0) })) {
+                        ForEach(ActivationKey.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    Stepper("Follow-up: \(Int(controller.settings.followUpSeconds)) s",
+                            value: Binding(get: { controller.settings.followUpSeconds },
+                                           set: { controller.setFollowUp($0) }),
+                            in: CompanionSettings.followUpRange, step: 1)
+                }
+                if controller.settings.activation == .wakeWord {
+                    DraftField("Wake phrase", value: controller.settings.wakePhrase) { controller.setWakePhrase($0) }
+                }
+                if !controller.activationNote.isEmpty {
+                    Text(controller.activationNote).font(.caption).foregroundStyle(.orange)
+                    Button("Allow Input Monitoring…") { controller.requestKeyPermission() }
+                }
+            } header: {
+                Text("Listening")
+            } footer: {
+                Text("Tap the key alone, talk, and she answers once you stop. Tap again to dismiss, double-tap for "
+                     + "hands-free, Esc to end. After her reply you can keep talking for the follow-up time; then "
+                     + "the session closes so nothing is billed.").font(.caption)
+            }
             Section("Voice") {
                 Picker("Model", selection: Binding(get: { controller.provider }, set: { controller.chooseProvider($0) })) {
                     ForEach(CompanionKeys.providers, id: \.self) { provider in

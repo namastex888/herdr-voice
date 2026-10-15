@@ -78,6 +78,7 @@ public enum JSONValue: Codable, Sendable, Hashable {
 
     public var string: String? { if case .string(let value) = self { value } else { nil } }
     public var bool: Bool? { if case .bool(let value) = self { value } else { nil } }
+    public var number: Double? { if case .number(let value) = self { value } else { nil } }
     public var array: [JSONValue]? { if case .array(let value) = self { value } else { nil } }
     public var object: [String: JSONValue]? { if case .object(let value) = self { value } else { nil } }
     public var isNull: Bool { self == .null }
@@ -201,12 +202,12 @@ public struct ConfigTree: Codable, Sendable, Hashable {
     ])
 
     /// "Reset to new hire": the factory identity, memory, settings and no skills, keeping what the human owns
-    /// (the harness entries and the provider).
+    /// (the harness entries, the provider and how she listens: `Governance.humanSettingsKeys`).
     public func resetToNewHire() -> ConfigTree {
         var reset = ConfigTree(version: version, entries: harnessEntries)
         reset.entries += Self.factory.entries.filter { $0.kind != .harness }
-        if var settings = reset["settings"], let provider = self["settings"]?.config["provider"] {
-            settings.config["provider"] = provider
+        if var settings = reset["settings"], let kept = self["settings"]?.config {
+            for key in Governance.humanSettingsKeys where kept[key] != nil { settings.config[key] = kept[key] }
             reset["settings"] = settings
         }
         return reset

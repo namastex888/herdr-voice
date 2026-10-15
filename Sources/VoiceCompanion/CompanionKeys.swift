@@ -55,6 +55,14 @@ struct CompanionSettings: Equatable {
     var voice: String?
     var routeWithJev: Bool
     var jevModel: String
+    /// How she listens (the human's: it decides the bill).
+    var activation: ActivationMode
+    var activationKey: ActivationKey
+    /// After her reply, how long you can talk without the key.
+    var followUpSeconds: Double
+    var wakePhrase: String
+
+    static let followUpRange: ClosedRange<Double> = 3...60
 
     init(_ tree: ConfigTree) {
         let config = tree["settings"]?.config ?? ConfigTree.defaultSettings
@@ -64,5 +72,12 @@ struct CompanionSettings: Equatable {
         voice = config["voice"]?.string.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
         routeWithJev = config["routeWithJev"]?.bool ?? true
         jevModel = config["jevModel"]?.string.flatMap { $0.isEmpty ? nil : $0 } ?? JevRouter.defaultModel
+        activation = config["activation"]?.string.flatMap(ActivationMode.init(rawValue:)) ?? .default
+        activationKey = config["activationKey"]?.string.flatMap(ActivationKey.init(rawValue:)) ?? .default
+        followUpSeconds = min(max(config["followUpSeconds"]?.number ?? 8, Self.followUpRange.lowerBound),
+                              Self.followUpRange.upperBound)
+        wakePhrase = config["wakePhrase"]?.string.flatMap {
+            $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0.trimmingCharacters(in: .whitespaces)
+        } ?? WakePhrase.default
     }
 }

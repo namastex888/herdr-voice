@@ -330,7 +330,12 @@ public struct ComponentHost: Sendable {
             registrar.publish(entry.config)
             return .active(provides: ["memory"])
         case .settings:
-            for key in ["voice", "jevModel", "provider"] { _ = try Self.text(entry, key) }
+            for key in ["voice", "jevModel", "provider", "activation", "activationKey", "wakePhrase", "accent"] {
+                _ = try Self.text(entry, key)
+            }
+            if let seconds = entry.config["followUpSeconds"], !seconds.isNull, seconds.number == nil {
+                throw ComponentError("settings.followUpSeconds must be a number")
+            }
             if let route = entry.config["routeWithJev"], !route.isNull, route.bool == nil {
                 throw ComponentError("settings.routeWithJev must be true or false")
             }

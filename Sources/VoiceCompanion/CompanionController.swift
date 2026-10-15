@@ -62,7 +62,7 @@ import VoiceEngine
     private var router: any SkillRouter = WordRouter()
     private(set) var session: Realtime?
     private let configDirectory: URL?
-    private var window: ChatWindow?
+    var window: ChatWindow?
     private var orb: Orb?
     private var statusItem: NSStatusItem?
     /// The status menu's delegate (menus hold theirs weakly).
@@ -71,6 +71,19 @@ import VoiceEngine
     private var refreshTimer: Timer?
     private var activeObserver: NSObjectProtocol?
     private var muteDebounce = PressDebounce()
+
+    // Activation (see CompanionActivation.swift): when she listens, and the conversation's state for the UI.
+    var turns = TurnTaking()
+    var keyMonitor: ActivationKeyMonitor?
+    var wakeWord: WakeWordSpotter?
+    var activationTimer: Timer?
+    /// The conversation as the views show it.
+    @Published var conversation: TurnTaking.Phase = .idle
+    @Published var handsFree = false
+    /// The activation key can't be watched (no Input Monitoring) or the wake word can't listen: what she does instead.
+    @Published var activationNote = ""
+    /// The conversation opened the chat, so its end puts it away again.
+    var openedByActivation = false
 
     /// `store` is where `config.json` lives; the first time it is built from 0.1.0's settings (`legacyDefaults`) and
     /// skills folder. nil keeps the configuration in memory. `gate` holds proposals until the human's own yes.
@@ -136,8 +149,9 @@ import VoiceEngine
         self.window = window
         installStatusItem()
         installOrb()
-        Hotkey.registerMute { [weak self] in self?.hotkeyMute() }
+        Hotkey.registerMute { [weak self] in self?.hotkeyPressed() }
         startSession()
+        applyActivation()
         watchForHarnesses()
         window.show()
     }
@@ -155,6 +169,9 @@ import VoiceEngine
                                instructions: registry.instructions, greeting: registry.greeting)
         session.setTools(registry.activeTools)
         attach(session)
+        // Tap-to-talk and the wake word: nothing opens (or bills) until she's asked; the reply waits for the turn.
+        session.deferReplies = settings.activation.opensOnRequest
+        session.setStandby(settings.activation.opensOnRequest)
         do {
             try session.start()
         } catch {
@@ -170,10 +187,9 @@ import VoiceEngine
     /// its first notes reach the chat; the self-test attaches one it never starts.
     func attach(_ session: Realtime) {
         session.onEvent = { [weak self] in self?.chat.append($0) }
-        session.onUserTurn = { [weak self] in self?.route($0) }
-        session.audio.onSpeakingChanged = { [weak session] speaking in
-            Hotkey.setStopKey(active: speaking) { session?.stopSpeech(reason: "Esc") }
-        }
+        session.onUserTurn = { [weak self] in self?.userSaid($0) }
+        session.onSpeech = { [weak self] started in self?.activation(started ? .speechStarted : .speechStopped) }
+        session.audio.onSpeakingChanged = { [weak self] _ in self?.updateEscape() }
         self.session = session
         syncControls()
     }
@@ -229,7 +245,9 @@ import VoiceEngine
             _ = muteDebounce.accept() // ⌥⌘M right after this is the same press
             session.setMuted(on)
         case .pause(let on): if on { session.pause() } else { session.resume() }
-        case .connect(let on): if on { session.reconnect() } else { session.disconnect() }
+        case .connect(let on):
+            if on { session.reconnect() } else { session.disconnect() }
+            if !on { activation(.reset) } // closed by you: no conversation to finish
         }
         syncControls()
     }
@@ -280,6 +298,12 @@ import VoiceEngine
     /// Asks the router which learned skill or harness this turn needs, over the registry's route options, without
     /// holding up the voice: the answer narrows the tools for the steps that follow, and `use_skill` covers anything
     /// it misses.
+    /// Each of your turns: routed to a skill, and "that's all" ends the conversation.
+    private func userSaid(_ text: String) {
+        route(text)
+        if DismissPhrase.matches(text) { activation(.dismiss) }
+    }
+
     private func route(_ text: String) {
         recentTurns = Array((recentTurns + [text]).suffix(Self.routingContext))
         let router = router, options = registry.routeOptions, recent = Array(recentTurns.dropLast())
@@ -314,6 +338,10 @@ import VoiceEngine
         reload()
         let after = settings
         if after.routeWithJev != before.routeWithJev || after.jevModel != before.jevModel { refreshRouter() }
+        if after.activation != before.activation || after.activationKey != before.activationKey
+            || after.followUpSeconds != before.followUpSeconds || after.wakePhrase != before.wakePhrase {
+            applyActivation()
+        }
         if after.provider != before.provider {
             followProvider()
         } else if after.voice != before.voice {
@@ -333,7 +361,10 @@ import VoiceEngine
             return
         }
         guard let session else { return startSession() }
-        if session.provider != provider { session.switchProvider(to: provider, key: key, voice: voice) }
+        if session.provider != provider {
+            session.switchProvider(to: provider, key: key, voice: voice)
+            applyActivation() // the cooldown depends on whether the new provider can hold a reply
+        }
     }
 
     func title(ofSkill id: String) -> String {
@@ -424,6 +455,30 @@ import VoiceEngine
         edit { try registry.setField("settings", "routeWithJev", .bool(on)) }
     }
 
+    /// How she listens: the human's own setting (it decides the bill), never proposable.
+    func setActivation(_ mode: ActivationMode) {
+        guard mode != settings.activation else { return }
+        edit { try registry.setField("settings", "activation", .string(mode.rawValue)) }
+    }
+
+    func setActivationKey(_ key: ActivationKey) {
+        guard key != settings.activationKey else { return }
+        edit { try registry.setField("settings", "activationKey", .string(key.rawValue)) }
+    }
+
+    func setFollowUp(_ seconds: Double) {
+        let seconds = min(max(seconds.rounded(), CompanionSettings.followUpRange.lowerBound),
+                          CompanionSettings.followUpRange.upperBound)
+        guard seconds != settings.followUpSeconds else { return }
+        edit { try registry.setField("settings", "followUpSeconds", .number(seconds)) }
+    }
+
+    func setWakePhrase(_ text: String) {
+        let phrase = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !phrase.isEmpty, phrase != settings.wakePhrase else { return }
+        edit { try registry.setField("settings", "wakePhrase", .string(phrase)) }
+    }
+
     func setJevModel(_ text: String) {
         let model = text.trimmingCharacters(in: .whitespaces)
         guard !model.isEmpty, model != settings.jevModel else { return }
@@ -462,6 +517,20 @@ import VoiceEngine
         let folder = configDirectory ?? CompanionStore.defaultDirectory
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         NSWorkspace.shared.open(folder)
+    }
+
+    /// A conversation started by a tap or the wake word shows the chat, without taking focus from the app you're
+    /// in; its end puts the chat away again if that's what showed it.
+    func showConversation() {
+        guard let window, !window.isVisible else { return }
+        openedByActivation = true
+        window.panel.orderFrontRegardless()
+    }
+
+    func hideConversation() {
+        guard openedByActivation else { return }
+        openedByActivation = false
+        window?.panel.orderOut(nil)
     }
 
     // MARK: orb and menu bar

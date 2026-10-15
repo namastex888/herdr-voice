@@ -76,7 +76,30 @@ func commandGoldens(provider: Provider) {
     for (command, expected) in cases {
         #expect(wire.encode(command).map(json) == expected.map(json), "\(command)")
     }
-    #expect(wire.capabilities == WireCapabilities(explicitReplies: true, nativeResumption: false, dynamicTools: true))
+    // The two flags that only a session opting in uses (deferred replies) are the one difference between them.
+    #expect(wire.capabilities == WireCapabilities(explicitReplies: true, nativeResumption: false, dynamicTools: true,
+                                                  deferredReplies: true, manualTurns: provider == .grok))
+}
+
+@Test("deferring replies: OpenAI keeps its VAD without answering; xAI hands the turns to the session")
+func deferredReplies() {
+    let openai = OpenAIRealtimeWire(provider: .openai), grok = OpenAIRealtimeWire(provider: .grok)
+    let held: [String: Any] = ["type": "session.update", "session": ["type": "realtime", "audio": ["input": [
+        "turn_detection": ["type": "semantic_vad", "create_response": false, "interrupt_response": true]]]]]
+    let answering: [String: Any] = ["type": "session.update", "session": ["type": "realtime", "audio": ["input": [
+        "turn_detection": ["type": "semantic_vad", "create_response": true, "interrupt_response": true]]]]]
+    #expect(openai.encode(.deferReplies(true)).map(json) == [json(held)])
+    #expect(openai.encode(.deferReplies(false)).map(json) == [json(answering)])
+    #expect(openai.encode(.commitInput).isEmpty) // its VAD commits each turn
+    #expect(grok.encode(.deferReplies(true)).map(json)
+            == [json(["type": "session.update", "session": ["turn_detection": NSNull()]])])
+    #expect(grok.encode(.deferReplies(false)).map(json)
+            == [json(["type": "session.update", "session": ["turn_detection": ["type": "server_vad"]]])])
+    #expect(grok.encode(.commitInput).map(json) == [json(["type": "input_audio_buffer.commit"])])
+    // Setting back to answering by itself is exactly what setup sets up.
+    let setup = Provider.openai.sessionUpdate(instructions: "I", voice: "V")
+    let setupDetection = ((setup["session"] as? [String: Any])?["audio"] as? [String: Any]).map { json($0) } ?? ""
+    #expect(setupDetection.contains(#""create_response":true"#) && setupDetection.contains("semantic_vad"))
 }
 
 @Test("tools can be narrowed mid-session where the provider allows it")

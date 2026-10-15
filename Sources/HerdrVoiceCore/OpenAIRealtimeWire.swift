@@ -9,8 +9,11 @@ public final class OpenAIRealtimeWire: Wire, Sendable {
         self.provider = provider
     }
 
+    /// Both can hold a turn's reply. OpenAI keeps its speech detection with `create_response: false`; xAI documents
+    /// no such switch, only turning detection off (`turn_detection: null`), so there the session takes the turns.
     public var capabilities: WireCapabilities {
-        WireCapabilities(explicitReplies: true, nativeResumption: false, dynamicTools: true)
+        WireCapabilities(explicitReplies: true, nativeResumption: false, dynamicTools: true, deferredReplies: true,
+                         manualTurns: provider == .grok)
     }
 
     public func encode(_ command: WireCommand) -> [[String: Any]] {
@@ -46,6 +49,10 @@ public final class OpenAIRealtimeWire: Wire, Sendable {
             return [["type": "response.cancel"]]
         case let .truncate(itemID, audioEndMs):
             return [["type": "conversation.item.truncate", "item_id": itemID, "content_index": 0, "audio_end_ms": audioEndMs]]
+        case .deferReplies(let on):
+            return [provider.turnDetectionUpdate(deferReplies: on)]
+        case .commitInput:
+            return capabilities.manualTurns ? [["type": "input_audio_buffer.commit"]] : []
         }
     }
 

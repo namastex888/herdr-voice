@@ -174,6 +174,24 @@ public enum Provider: String, CaseIterable, Sendable {
         }
     }
 
+    /// Who decides a spoken turn is over and answers it (OpenAI and Grok; see `WireCommand.deferReplies`). Deferring,
+    /// OpenAI still detects speech (and interrupts a reply when you talk over it) but doesn't answer by itself; xAI
+    /// stops detecting speech, and the session commits each turn. Not deferring is what `sessionUpdate` sets up.
+    public func turnDetectionUpdate(deferReplies on: Bool) -> [String: Any] {
+        switch self {
+        case .grok:
+            let detection: Any = on ? NSNull() : ["type": "server_vad"]
+            return ["type": "session.update", "session": ["turn_detection": detection] as [String: Any]]
+        default:
+            return ["type": "session.update", "session": [
+                "type": "realtime",
+                "audio": ["input": ["turn_detection": [
+                    "type": "semantic_vad", "create_response": !on, "interrupt_response": true,
+                ] as [String: Any]]],
+            ] as [String: Any]]
+        }
+    }
+
     /// Replaces a live session's tools (OpenAI and Grok; see `WireCapabilities.dynamicTools`).
     public func toolsUpdate(_ tools: [[String: Any]]) -> [String: Any] {
         switch self {

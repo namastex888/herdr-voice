@@ -50,9 +50,22 @@ public enum ProviderContract {
             ["name": "updateTools", "tools": narrowed.names, "messages": wire.encode(.updateTools(narrowed))],
             ["name": "updateInstructions", "instructions": replacedInstructions,
              "messages": wire.encode(.updateInstructions(replacedInstructions))],
+            // The companion's tap-to-talk: the provider holds each turn's reply until asked, then answers again.
+            deferStep("deferReplies", wire, on: true),
+            deferStep("answerAgain", wire, on: false),
         ]
         return ["provider": provider.rawValue, "keychainService": provider.keyEnv, "url": provider.url.absoluteString,
                 "auth": auth(provider), "steps": steps]
+    }
+
+    /// A turn-detection change, with the `turn_detection` it sends so the probe can compare the echo (null for xAI's
+    /// manual turns).
+    static func deferStep(_ name: String, _ wire: any Wire, on: Bool) -> [String: Any] {
+        let messages = wire.encode(.deferReplies(on))
+        let session = messages.first?["session"] as? [String: Any]
+        let audioInput = (session?["audio"] as? [String: Any])?["input"] as? [String: Any]
+        let detection = session?["turn_detection"] ?? audioInput?["turn_detection"] ?? NSNull()
+        return ["name": name, "turnDetection": detection, "messages": messages]
     }
 
     /// How `Provider.request(key:)` carries the key, found by building a request with a stand-in key: a header whose

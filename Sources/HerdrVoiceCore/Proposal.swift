@@ -74,17 +74,27 @@ public struct Proposal: Codable, Sendable, Hashable {
 }
 
 /// Which paths the assistant may propose (§1). Everything else, above all the harness entries, every `disabled`,
-/// `settings.provider` and the confirmation rules, is the human's, changed only in the app's own UI.
+/// the human's settings (`humanSettingsKeys`) and the confirmation rules, is the human's, changed only in the app's
+/// own UI.
 public enum Governance {
     public static let identityKeys: Set<String> = ["name", "role", "personality", "instructions"]
     public static let settingsKeys: Set<String> = ["voice", "routeWithJev", "jevModel"]
+    /// Settings that are the human's: which voice model (and bill), and how and when she listens (also a bill). A
+    /// reset and the assistant's own reverts keep them as they are.
+    public static let humanSettingsKeys: Set<String> = ["provider", "activation", "activationKey", "followUpSeconds",
+                                                        "wakePhrase", "accent"]
+
+    /// `settings.provider`, `settings.activation`, ...
+    public static func isHumanSetting(_ path: String) -> Bool {
+        path.hasPrefix("settings.") && humanSettingsKeys.contains(String(path.dropFirst("settings.".count)))
+    }
     public static let skillKeys: Set<String> = ["title", "summary", "needs", "steps", "playbook"]
 
     /// Refuses a change to a path that isn't proposable, or a value of the wrong type.
     public static func check(_ change: Proposal.Change) throws {
         let humanOwned = ComponentError("\(change.path) is the human's to change, in the app; you can't propose it")
         if change.path.hasPrefix("harness.") || change.path == "harness" || change.path.hasSuffix(".disabled")
-            || change.path == "settings.provider" {
+            || isHumanSetting(change.path) {
             throw humanOwned
         }
         switch change.op {
@@ -213,7 +223,7 @@ public struct ChangeRecord: Codable, Sendable, Hashable, Identifiable {
     }
 
     /// `current` with each entry this change touched put back as it was before it. `keepHumanOwned` leaves the
-    /// human's parts (harness entries, every `disabled`, `settings.provider`) as they are now, so the assistant's
+    /// human's parts (harness entries, every `disabled`, the human's settings) as they are now, so the assistant's
     /// revert of it only ever touches what it may propose.
     public func revertTarget(from current: ConfigTree, keepHumanOwned: Bool) -> ConfigTree {
         var target = current
@@ -225,7 +235,9 @@ public struct ChangeRecord: Codable, Sendable, Hashable, Identifiable {
             if keepHumanOwned {
                 if restored.kind == .harness { continue }
                 restored.disabled = current[id]?.disabled ?? false
-                if restored.kind == .settings { restored.config["provider"] = current[id]?.config["provider"] }
+                if restored.kind == .settings {
+                    for key in Governance.humanSettingsKeys { restored.config[key] = current[id]?.config[key] }
+                }
             }
             target[id] = restored
         }

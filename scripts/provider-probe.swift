@@ -14,6 +14,8 @@ struct Step {
     let messages: [[String: Any]]
     let tools: [String]?
     let instructions: String?
+    /// The `turn_detection` the step sends (NSNull for "off"), when the echo should be compared with it.
+    let turnDetection: Any?
 }
 
 struct Plan {
@@ -36,7 +38,8 @@ struct Plan {
         self.auth = auth
         self.steps = steps.map {
             Step(name: $0["name"] as? String ?? "?", messages: $0["messages"] as? [[String: Any]] ?? [],
-                 tools: $0["tools"] as? [String], instructions: $0["instructions"] as? String)
+                 tools: $0["tools"] as? [String], instructions: $0["instructions"] as? String,
+                 turnDetection: $0["turnDetection"])
         }
     }
 }
@@ -197,6 +200,23 @@ func request(_ plan: Plan, key: String) -> URLRequest {
                 guard echoed == sent else { return fail("the session's instructions differ from those sent") }
                 detail += ", instructions echoed"
             }
+            if let sent = step.turnDetection {
+                let input = (session["audio"] as? [String: Any])?["input"] as? [String: Any]
+                let echoed = session["turn_detection"] ?? input?["turn_detection"]
+                if sent is NSNull {
+                    guard echoed == nil || echoed is NSNull else {
+                        return fail("turn detection is still on: \(compact(echoed))")
+                    }
+                    detail += ", turn detection off (the session commits turns)"
+                } else if let sent = sent as? [String: Any] {
+                    guard let echoed = echoed as? [String: Any] else { return fail("no turn_detection in the echo") }
+                    // Every field sent must come back as sent; a field dropped from the echo isn't honoured.
+                    for (key, value) in sent where compact(echoed[key]) != compact(value) {
+                        return fail("turn_detection.\(key) came back as \(compact(echoed[key])), sent \(compact(value))")
+                    }
+                    detail += ", turn_detection echoed \(compact(echoed))"
+                }
+            }
         }
         record(step.name, "PASS", detail)
         waiting = false
@@ -211,6 +231,16 @@ func request(_ plan: Plan, key: String) -> URLRequest {
         lines.forEach { print($0) }
         exit(failed ? 1 : 0)
     }
+}
+
+/// A JSON value as compact text, for comparing and reporting echoed fields.
+func compact(_ value: Any?) -> String {
+    guard let value else { return "nothing" }
+    if value is NSNull { return "null" }
+    if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .fragmentsAllowed]) {
+        return String(decoding: data, as: UTF8.self)
+    }
+    return "\(value)"
 }
 
 let arguments = CommandLine.arguments

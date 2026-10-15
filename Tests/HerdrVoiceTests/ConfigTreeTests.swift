@@ -28,11 +28,18 @@ import Testing
     tree.entries.append(skillEntry("tidy"))
     tree["harness.shell"]?.disabled = false
     tree["settings"]?.config["provider"] = .string("openai")
+    tree["settings"]?.config["activation"] = .string("wakeWord")
+    tree["settings"]?.config["followUpSeconds"] = .number(15)
+    tree["settings"]?.config["voice"] = .string("ash")
     tree["memory"]?.config["facts"] = .array([.string("Standup is at 10")])
     let reset = tree.resetToNewHire()
     #expect(reset.skillEntries.isEmpty && reset["memory"] == ConfigTree.factory["memory"])
     #expect(reset["harness.shell"]?.disabled == false)
     #expect(reset["settings"]?.config["provider"] == .string("openai"))
+    // How she listens is the human's too; her voice is factory again.
+    #expect(reset["settings"]?.config["activation"] == .string("wakeWord"))
+    #expect(reset["settings"]?.config["followUpSeconds"] == .number(15))
+    #expect(reset["settings"]?.config["voice"] == .null)
 }
 
 /// Writes 0.1.0's state exactly as it kept it: UserDefaults keys, and one JSON file per learned skill.
