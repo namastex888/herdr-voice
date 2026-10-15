@@ -47,15 +47,52 @@ public struct ToolOutput: Equatable, Sendable {
     }
 }
 
-/// How a provider's protocol differs in ways the session has to act on.
+/// How a provider's protocol differs in ways the session has to act on. `Realtime` branches on these, not on which
+/// provider it talks to; WireConformanceTests holds every wire to what it declares, and docs/providers.md lists them.
+/// The defaults describe a cloud provider: server VAD, a session that is up on its first event, billed by use.
 public struct WireCapabilities: Equatable, Sendable {
-    /// Replies are requested explicitly (`response.create`). Without it the provider answers by itself after a
-    /// completed user turn or a tool response, so the session sends those only when a reply is wanted.
+    /// The session drives replies: it asks for one (`requestReply`), stops one (`cancelReply`) and says how much of
+    /// one was heard (`truncate`). Without it the provider answers by itself after a completed user turn or a tool
+    /// response, so the session sends those only when a reply is wanted, and a reply can only be stopped locally.
     public let explicitReplies: Bool
     /// The provider resumes a session from a handle with its context intact, so no recap is needed.
     public let nativeResumption: Bool
-    /// Tools can be swapped mid-session (`updateTools`); otherwise a session keeps the tools it was set up with.
+    /// Tools and instructions can be replaced mid-session (`updateTools`, `updateInstructions`); otherwise a session
+    /// keeps the tools it was set up with, and new instructions need a new connection.
     public var dynamicTools = false
+    /// The provider detects no speech itself: the session's speech gate does. The session marks each utterance's
+    /// start (`inputStarted`) and end (`audioPaused`), streams audio only inside one, reports speech started and
+    /// stopped itself, and asks for the reply to each finished utterance.
+    public var explicitSpeechOnsets = false
+    /// Every utterance onset and every `clearInput` starts a new epoch, and the provider drops all work from older
+    /// epochs (replies, audio, tool calls) without finishing it. Tool calls and their results carry their epoch.
+    public var turnEpochs = false
+    /// The session is up only once the provider acknowledges the setup (`sessionReady`), and an error before that means
+    /// the setup was refused. Without it, the first event on a socket means the session is up.
+    public var setupHandshake = false
+    /// Use is billed, so a session nobody has talked to for a while is closed, and reopened when you next speak.
+    public var metered = true
+}
+
+public extension WireCapabilities {
+    /// Every flag by name, in declaration order. Read by reflection, so a new flag reaches docs/providers.md by itself.
+    var flags: [(name: String, value: Bool)] {
+        Mirror(reflecting: self).children.compactMap { child in
+            guard let name = child.label, let value = child.value as? Bool else { return nil }
+            return (name, value)
+        }
+    }
+
+    /// What each flag means, for the legend under the provider table.
+    static let meanings: [String: String] = [
+        "explicitReplies": "the session requests, cancels and truncates replies; otherwise the provider answers by itself",
+        "nativeResumption": "a session resumes from a handle with its context, so no recap is sent",
+        "dynamicTools": "tools and instructions can be replaced mid-session; otherwise only at setup",
+        "explicitSpeechOnsets": "no server VAD: the session marks each utterance's start and end and asks for its reply",
+        "turnEpochs": "each onset or clear starts an epoch, and work from older epochs is dropped",
+        "setupHandshake": "the session is up only once the setup is acknowledged (sessionReady)",
+        "metered": "billed by use, so a quiet session is closed until you speak",
+    ]
 }
 
 /// One provider's wire protocol. A new instance is made per connection; `decode` may keep state across messages.
@@ -64,6 +101,13 @@ public protocol Wire: AnyObject, Sendable {
     var capabilities: WireCapabilities { get }
     func encode(_ command: WireCommand) -> [[String: Any]]
     func decode(_ text: String) -> [ServerEvent]
+    /// Whether work from `epoch` still belongs to the current turn (see `WireCapabilities.turnEpochs`).
+    func isCurrent(epoch: Int) -> Bool
+}
+
+public extension Wire {
+    /// Without epochs, nothing is ever superseded.
+    func isCurrent(epoch: Int) -> Bool { true }
 }
 
 /// WebSocket frames to text. OpenAI and xAI send JSON as text frames; Gemini Live sends it as binary frames, which

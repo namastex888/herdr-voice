@@ -3,14 +3,36 @@ import Foundation
 public enum Provider: String, CaseIterable, Sendable {
     case local, openai, grok, gemini
 
+    /// The model a session talks to by default. Gemini's can be changed with HERDR_VOICE_GEMINI_MODEL, and Local's
+    /// brain with HERDR_LOCAL_BRAIN_MODEL.
+    public var model: String {
+        switch self {
+        case .local: LocalWire.defaultBrainModel
+        case .openai: "gpt-realtime-2.1"
+        case .grok: "grok-voice-3.0"
+        case .gemini: GeminiLiveWire.defaultModel
+        }
+    }
+
     public var url: URL {
         switch self {
-        case .local: URL(string: "ws://127.0.0.1:1")!
-        case .openai: URL(string: "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1")!
-        case .grok: URL(string: "wss://api.x.ai/v1/realtime?model=grok-voice-3.0")!
+        case .local: URL(string: "ws://127.0.0.1:1")! // a placeholder: the helper's port is known once it's up
+        case .openai: URL(string: "wss://api.openai.com/v1/realtime?model=\(model)")!
+        case .grok: URL(string: "wss://api.x.ai/v1/realtime?model=\(model)")!
         case .gemini: URL(string: GeminiLiveWire.endpoint)!
         }
     }
+
+    /// Where a session connects, without query parameters (model, key).
+    public var endpoint: String {
+        switch self {
+        case .local: "ws://127.0.0.1:<port> (the helper's loopback port)"
+        case .openai, .grok, .gemini: url.absoluteString.components(separatedBy: "?")[0]
+        }
+    }
+
+    /// How this provider's protocol differs (see WireCapabilities), known before any connection exists.
+    public var capabilities: WireCapabilities { makeWire(environment: [:]).capabilities }
 
     /// As listed in the orb's menu, in this order.
     public static let menuOrder: [Provider] = [.local, .grok, .openai, .gemini]

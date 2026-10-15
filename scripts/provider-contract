@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# The live provider contract, with no audio. For each provider whose key is in the Keychain (services OPENAI_API_KEY,
+# XAI_API_KEY, GEMINI_API_KEY): connect, send the real setup message with the companion's full tool list, then a
+# narrowed tool update and an instruction update where the wire supports them, and check the provider accepts each.
+# Providers without a key are skipped. Prints a PASS/FAIL table; exits non-zero on any failure. Never prints a key.
+#
+# Usage: scripts/provider-contract
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+if [ -f "$HOME/.swiftly/env.sh" ]; then . "$HOME/.swiftly/env.sh"; fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/provider-contract.XXXXXX")"
+trap 'status=$?; rm -rf "$work"; exit $status' EXIT
+
+echo "building herdr-voice, VoiceCompanion and the probe…" >&2
+swift build --product herdr-voice >"$work/build.log" 2>&1 || { cat "$work/build.log" >&2; exit 2; }
+swift build --product VoiceCompanion >>"$work/build.log" 2>&1 || { cat "$work/build.log" >&2; exit 2; }
+swiftc -swift-version 6 -warnings-as-errors -O scripts/provider-probe.swift -o "$work/provider-probe" >&2
+
+swift run --skip-build VoiceCompanion --dump-tools "$work/tools.json" >&2
+# One plan per keyed provider (its URL, how it authenticates, the messages to send), listed as "provider<TAB>service".
+swift run --skip-build herdr-voice providers contract "$work/tools.json" "$work" >"$work/providers.tsv"
+
+results="$work/results.tsv"
+: >"$results"
+failed=0
+while IFS=$'\t' read -r provider service; do
+    if ! security find-generic-password -s "$service" </dev/null >/dev/null 2>&1; then
+        printf '%s\t%s\t%s\t%s\n' "$provider" "all" "SKIP" "no $service in the Keychain" >>"$results"
+        continue
+    fi
+    echo "probing ${provider}…" >&2
+    if ! gtimeout 120 "$work/provider-probe" "$work/$provider.json" </dev/null >>"$results"; then
+        failed=1
+        # A probe that died without reporting still has to show up as a failure.
+        grep -q "^$provider	" "$results" || printf '%s\t%s\t%s\t%s\n' "$provider" "all" "FAIL" "the probe exited without a result" >>"$results"
+    fi
+done <"$work/providers.tsv"
+
+echo
+echo "| Provider | Step | Result | Detail |"
+echo "|---|---|---|---|"
+while IFS=$'\t' read -r provider step status detail; do
+    echo "| $provider | $step | $status | $detail |"
+done <"$results"
+
+if grep -q "	FAIL	" "$results"; then failed=1; fi
+exit "$failed"

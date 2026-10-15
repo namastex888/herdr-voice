@@ -233,7 +233,7 @@ public final class LocalRuntime: @unchecked Sendable { // process, input and gen
             environment["HERDR_VOICE_LOCAL_BRAIN_\(name)"] ?? environment["HERDR_LOCAL_BRAIN_\(name)"]
         }
         let kind = setting("KIND") ?? "local"
-        let model = setting("MODEL") ?? "qwen3.5:4b"
+        let model = setting("MODEL") ?? LocalWire.defaultBrainModel
         let baseURL = setting("URL") ?? "http://127.0.0.1:11434/v1"
         let protocolName = setting("PROTOCOL") ?? "openai-chat"
         guard ["openai-chat", "openai", "anthropic"].contains(protocolName) else {
