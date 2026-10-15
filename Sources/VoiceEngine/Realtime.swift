@@ -32,7 +32,9 @@ import os
     private var voice: String
     private var requestOverride: URLRequest?
     nonisolated public let audio = Audio()
-    private var socket: URLSessionWebSocketTask?
+    private var socket: (any SessionSocket)?
+    /// Opens a connection's socket: a URLSession WebSocket, or a test's fake.
+    private let makeSocket: @MainActor (URLRequest) -> any SessionSocket
     /// The provider's wire protocol for the current connection (see Wire). Replaced on every connect.
     private var wire: Wire
     /// Gemini: resumes the previous session, context included, on the next connection.
@@ -186,7 +188,7 @@ import os
     /// Where the mic queue streams to: the current connection's wire and socket, read together under `micShared`.
     private struct MicLink {
         let wire: Wire
-        let socket: URLSessionWebSocketTask?
+        let socket: (any SessionSocket)?
         let connection: Int
         let onsets: Bool
         let localTurns: Bool
@@ -212,7 +214,7 @@ import os
         /// The current connection's wire and socket, for streaming audio from the mic queue. Main replaces the
         /// socket on every connect, so the mic queue must never read the session's own `socket`.
         var wire: Wire?
-        var socket: URLSessionWebSocketTask?
+        var socket: (any SessionSocket)?
         var connection = 0
         /// The last time the mic heard a speech-loud chunk (above the gate's opening level).
         var lastLoud = Date.distantPast
@@ -236,7 +238,11 @@ import os
 
     public init(provider: Provider, key: String, voice: String, request: URLRequest? = nil,
                 host: ToolHost = HerdrToolHost(), instructions: String = voiceInstructions,
-                greeting: String = Greeting.prompt) {
+                greeting: String = Greeting.prompt,
+                socket makeSocket: @escaping @MainActor (URLRequest) -> any SessionSocket = {
+                    URLSession.shared.webSocketTask(with: $0)
+                }) {
+        self.makeSocket = makeSocket
         self.provider = provider
         self.key = key
         self.voice = voice
@@ -417,7 +423,7 @@ import os
         dormant = true
         if let s = socket {
             socket = nil
-            s.cancel(with: .normalClosure, reason: nil)
+            s.close(.normalClosure)
         }
         keepalive?.cancel()
         keepalive = nil
@@ -453,7 +459,7 @@ import os
         pendingOutputs.removeAll()
         pendingTexts.removeAll()
         renewWhenIdle = false
-        let task = URLSession.shared.webSocketTask(with: requestOverride ?? provider.request(key: key))
+        let task = makeSocket(requestOverride ?? provider.request(key: key))
         socket = task
         let newWire = wire, id = connection
         micShared.withLock {
@@ -518,10 +524,10 @@ import os
         if replies.wantReply() { requestResponse() }
     }
 
-    private func connectionLost(_ task: URLSessionWebSocketTask, reason: Reconnect.Reason, detail: String) {
+    private func connectionLost(_ task: any SessionSocket, reason: Reconnect.Reason, detail: String) {
         guard task === socket else { return }
         socket = nil
-        task.cancel(with: .goingAway, reason: nil)
+        task.close(.goingAway)
         keepalive?.cancel()
         keepalive = nil
         status = .disconnected
@@ -568,7 +574,7 @@ import os
 
     /// Pings every 20 s. A failed ping, or no pong by the next one, means the socket is dead (sleep, network
     /// change) even though no error surfaced, so reconnect instead of waiting forever.
-    private func startKeepalive(_ task: URLSessionWebSocketTask) {
+    private func startKeepalive(_ task: any SessionSocket) {
         keepalive?.cancel()
         pongPending = false
         let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -579,7 +585,7 @@ import os
                 return self.connectionLost(task, reason: .dropped, detail: "no reply to keepalive")
             }
             self.pongPending = true
-            task.sendPing { error in
+            task.ping { error in
                 DispatchQueue.main.async {
                     self.pongPending = false
                     if let error { self.connectionLost(task, reason: .dropped, detail: "keepalive failed: \(error.localizedDescription)") }
@@ -692,7 +698,7 @@ import os
         note("👋 herdr-voice closed")
         guard let s = socket else { return }
         socket = nil
-        s.cancel(with: .normalClosure, reason: nil)
+        s.close(.normalClosure)
     }
 
     public func toggleMute() {
@@ -800,7 +806,7 @@ import os
         dormant = false
         if let s = socket {
             socket = nil // its close must not count as a failure
-            s.cancel(with: .normalClosure, reason: nil)
+            s.close(.normalClosure)
         }
         keepalive?.cancel()
         keepalive = nil
@@ -943,7 +949,7 @@ import os
         send(.truncate(itemID: cut.item, audioEndMs: cut.heardMs))
     }
 
-    private func receive(_ task: URLSessionWebSocketTask) {
+    private func receive(_ task: any SessionSocket) {
         task.receive { [weak self] result in
             DispatchQueue.main.async {
                 guard let self, task === self.socket else { return }
@@ -1062,7 +1068,7 @@ import os
                 note("✖ \(provider.menuTitle) handshake failed: \(msg)")
                 let failed = socket
                 socket = nil
-                failed?.cancel(with: .protocolError, reason: nil)
+                failed?.close(.protocolError)
                 keepalive?.cancel()
                 keepalive = nil
                 status = .disconnected
@@ -1117,7 +1123,7 @@ import os
         note("⇄ switching to \(newProvider.menuTitle) (voice \(newVoice))")
         if let old = socket {
             socket = nil // its close must not count as a failure
-            old.cancel(with: .normalClosure, reason: nil)
+            old.close(.normalClosure)
         }
         keepalive?.cancel()
         keepalive = nil
@@ -1168,7 +1174,7 @@ import os
         note(renewFresh ? "↻ renewing the connection with the new setup"
              : "↻ renewing the connection (the provider limits how long one lasts)")
         socket = nil // its close must not count as a failure
-        old.cancel(with: .normalClosure, reason: nil)
+        old.close(.normalClosure)
         keepalive?.cancel()
         keepalive = nil
         status = .disconnected
@@ -1318,10 +1324,10 @@ import os
 
     /// Sends frames on `socket`, which belongs to `connection`. Nonisolated so the mic queue can stream with the
     /// socket it read under `micShared`.
-    private nonisolated func transmit(_ frames: [[String: Any]], on socket: URLSessionWebSocketTask, connection id: Int) {
+    private nonisolated func transmit(_ frames: [[String: Any]], on socket: any SessionSocket, connection id: Int) {
         for obj in frames {
             guard let data = try? JSONSerialization.data(withJSONObject: obj) else { continue }
-            socket.send(.string(String(decoding: data, as: UTF8.self))) { [weak self] err in
+            socket.send(text: String(decoding: data, as: UTF8.self)) { [weak self] err in
                 guard let err else { return }
                 DispatchQueue.main.async {
                     // Failures on a socket that never came up, or has since been replaced, are already reported by

@@ -181,8 +181,12 @@ public final class Audio: @unchecked Sendable {
         let heard = playback.interrupt(sampleRate: Int(Audio.rate))
         generation += 1
         if heard != nil { onSpeakingChanged?(false) }
-        player.stop()
-        player.play()
+        // A player outside a running engine raises on play(): a session that was never started (the self-test,
+        // VoiceEngineTests) has nothing playing to stop.
+        if engine.isRunning {
+            player.stop()
+            player.play()
+        }
         levels.withLock { $0.out = 0 }
         return heard
     }

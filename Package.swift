@@ -18,5 +18,7 @@ let package = Package(
         /// The standalone companion: a floating chat that controls the Mac through skills.
         .executableTarget(name: "VoiceCompanion", dependencies: ["HerdrVoiceCore", "VoiceEngine"]),
         .testTarget(name: "HerdrVoiceTests", dependencies: ["HerdrVoiceCore"]),
+        /// The live session driven end to end with a fake socket and made-up mic chunks: no microphone, no network.
+        .testTarget(name: "VoiceEngineTests", dependencies: ["VoiceEngine", "HerdrVoiceCore"]),
     ]
 )
