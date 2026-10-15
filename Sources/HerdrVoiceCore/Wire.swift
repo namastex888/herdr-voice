@@ -8,6 +8,9 @@ public enum WireCommand: Sendable {
     case setup(instructions: String, voice: String, resumeHandle: String?, tools: ToolList? = nil)
     /// Replaces the session's tools mid-session (only where `capabilities.dynamicTools`).
     case updateTools(ToolList)
+    /// Replaces the session's standing instructions mid-session (OpenAI and Grok; the others take them only at setup,
+    /// so `Realtime` renews their connection instead).
+    case updateInstructions(String)
     /// A locally verified microphone onset. Cloud providers continue to use server VAD and ignore this command.
     case inputStarted(utteranceID: String)
     /// 20 ms of mic audio, base64 PCM16 24 kHz mono.

@@ -162,6 +162,16 @@ public enum Provider: String, CaseIterable, Sendable {
         }
     }
 
+    /// Replaces a live session's instructions (OpenAI and Grok; see `WireCommand.updateInstructions`).
+    public func instructionsUpdate(_ instructions: String) -> [String: Any] {
+        switch self {
+        case .grok:
+            return ["type": "session.update", "session": ["instructions": instructions] as [String: Any]]
+        default:
+            return ["type": "session.update", "session": ["type": "realtime", "instructions": instructions] as [String: Any]]
+        }
+    }
+
     public var requiresAPIKey: Bool { self != .local }
 
     /// The provider to start with when neither --provider nor HERDR_VOICE_PROVIDER says: Local OpenLive once it's set

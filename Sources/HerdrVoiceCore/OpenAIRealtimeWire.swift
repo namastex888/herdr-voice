@@ -20,6 +20,8 @@ public final class OpenAIRealtimeWire: Wire, Sendable {
                                            tools: tools?.definitions ?? HerdrTools.schemas)]
         case .updateTools(let tools):
             return [provider.toolsUpdate(tools.definitions)]
+        case .updateInstructions(let instructions):
+            return [provider.instructionsUpdate(instructions)]
         case .inputStarted:
             return []
         case .appendAudio(let b64):

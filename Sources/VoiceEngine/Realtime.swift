@@ -10,8 +10,10 @@ import os
 
     /// What tools run through: every Herdr tool for the plugin, the skill registry for the companion.
     private let host: ToolHost
-    /// The voice's standing instructions, sent with every setup.
-    private let instructions: String
+    /// The voice's standing instructions, sent with every setup (see `setInstructions`).
+    private var instructions: String
+    /// The next renewal starts a fresh session (with the recap) instead of resuming, so new instructions take hold.
+    private var renewFresh = false
     /// What the voice is asked to say when a session first comes up.
     private let greeting: String
     /// The tools offered now: the host's, or the narrower set routed for the current turn (see `setTools`).
@@ -392,7 +394,9 @@ import os
             $0.connection = id
         }
         task.resume()
-        let handle = wire.capabilities.nativeResumption ? resumeHandle : nil
+        // New instructions need a fresh session: a resumed one would keep the old ones. The recap carries the context.
+        let handle = wire.capabilities.nativeResumption && !renewFresh ? resumeHandle : nil
+        renewFresh = false
         resumedWithContext = handle != nil
         // A provider that can't swap tools later starts with all of them.
         let offered = wire.capabilities.dynamicTools ? tools : host.tools
@@ -529,6 +533,25 @@ import os
         tools = list
         guard wire.capabilities.dynamicTools, status == .live, established else { return }
         send(.updateTools(list))
+    }
+
+    /// Replaces the voice's standing instructions. Sent at once where the provider can change them mid-session;
+    /// elsewhere the connection is renewed (right away, or once the current reply and tool calls finish) and the
+    /// recap carries the conversation over.
+    public func setInstructions(_ text: String) {
+        guard text != instructions else { return }
+        instructions = text
+        guard status == .live else { return } // not set up yet: the next setup sends them
+        if wire.capabilities.dynamicTools {
+            send(.updateInstructions(text)) // on the same socket, so after a setup that is still being answered
+            return
+        }
+        renewFresh = true
+        if !established || responseActive || audio.isSpeaking || replies.callsInFlight > 0 {
+            renewWhenIdle = true
+        } else {
+            renewConnection()
+        }
     }
 
     /// A message typed into a chat. It is the user's own words, like speech: it counts as theirs for tool
@@ -847,7 +870,8 @@ import os
     private func renewConnection() {
         renewWhenIdle = false
         guard status == .live, let old = socket else { return }
-        note("↻ renewing the connection (the provider limits how long one lasts)")
+        note(renewFresh ? "↻ renewing the connection with new instructions"
+             : "↻ renewing the connection (the provider limits how long one lasts)")
         socket = nil // its close must not count as a failure
         old.cancel(with: .normalClosure, reason: nil)
         keepalive?.cancel()

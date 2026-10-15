@@ -72,8 +72,8 @@ public final class LocalWire: Wire, @unchecked Sendable { // epoch and utterance
         switch command {
         case .setup(let instructions, let voice, _, let tools):
             return [Self.sessionUpdate(instructions: instructions, voice: voice, tools: tools?.definitions ?? HerdrTools.schemas)]
-        case .updateTools:
-            return [] // the bridge validates its tool manifest once, at the handshake
+        case .updateTools, .updateInstructions:
+            return [] // the bridge validates its tool manifest and takes instructions once, at the handshake
         case .inputStarted(let id):
             epoch += 1
             utteranceID = id

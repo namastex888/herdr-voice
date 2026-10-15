@@ -95,6 +95,17 @@ func toolUpdates() {
     #expect(((setup.first?["session"] as? [String: Any])?["tools"] as? [[String: Any]])?.count == 1)
 }
 
+@Test("instructions can be replaced mid-session where the provider allows it")
+func instructionUpdates() {
+    #expect(OpenAIRealtimeWire(provider: .openai).encode(.updateInstructions("NEW")).map(json)
+            == [json(["type": "session.update", "session": ["type": "realtime", "instructions": "NEW"]])])
+    #expect(OpenAIRealtimeWire(provider: .grok).encode(.updateInstructions("NEW")).map(json)
+            == [json(["type": "session.update", "session": ["instructions": "NEW"]])])
+    // Gemini Live and the local bridge take instructions only at setup; the session renews the connection instead.
+    #expect(GeminiLiveWire().encode(.updateInstructions("NEW")).isEmpty)
+    #expect(LocalWire().encode(.updateInstructions("NEW")).isEmpty)
+}
+
 @Test("OpenAI/xAI connect with the same bearer header as before", arguments: [Provider.openai, Provider.grok])
 func requestGolden(provider: Provider) {
     let request = provider.request(key: "k-123")

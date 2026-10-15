@@ -76,8 +76,8 @@ public final class GeminiLiveWire: Wire, @unchecked Sendable {
 
     public func encode(_ command: WireCommand) -> [[String: Any]] {
         switch command {
-        case .updateTools:
-            return [] // Gemini Live takes tools only in the setup message
+        case .updateTools, .updateInstructions:
+            return [] // Gemini Live takes tools and instructions only in the setup message
         case let .setup(instructions, voice, resumeHandle, tools):
             return [setupMessage(instructions: instructions, voice: voice, resumeHandle: resumeHandle,
                                  tools: tools?.definitions ?? HerdrTools.schemas)]
