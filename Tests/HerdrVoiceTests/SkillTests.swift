@@ -42,10 +42,15 @@ private func with(_ tree: ConfigTree, _ entries: ConfigEntry...) -> ConfigTree {
 
 @Test func theShippedFactoryTreeHasNoSkillsAndTheRealMacHarness() {
     #expect(ConfigTree.factory.skillEntries.isEmpty)
-    #expect(ConfigTree.factory.harnessEntries.map(\.id) == ["harness.mac", "harness.herdr", "harness.shell"])
+    #expect(ConfigTree.factory.harnessEntries.map(\.id)
+            == ["harness.mac", "harness.herdr", "harness.shell", "harness.companion"])
     #expect(ConfigTree.factory["harness.shell"]?.disabled == true)
     let registry = SkillRegistry(store: nil, factory: .standard, gate: ConfirmGate(minDelay: 0, wait: 0.2))
     #expect(registry.skills.isEmpty && registry.status(of: "harness.mac") == .active)
+    // Her own app's controls need the app to run in: without it they're there but unavailable, not failed.
+    if case .inactive = registry.status(of: "harness.companion") {} else {
+        Issue.record("harness.companion is \(String(describing: registry.status(of: "harness.companion")))")
+    }
     #expect(registry.greeting.contains("the Mac") && registry.greeting.contains("first task"))
     #expect(!registry.tools.names.contains("run_shell") && !registry.tools.names.contains("run_applescript"))
 }

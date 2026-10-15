@@ -196,10 +196,21 @@ public struct ConfigTree: Codable, Sendable, Hashable {
         ConfigEntry(id: "harness.mac", kind: .harness, config: ["harness": .string("mac"), "appleScript": .bool(false)]),
         ConfigEntry(id: "harness.herdr", kind: .harness, config: ["harness": .string("herdr")]),
         ConfigEntry(id: "harness.shell", kind: .harness, config: ["harness": .string("shell")], disabled: true),
+        ConfigEntry(id: "harness.companion", kind: .harness, config: ["harness": .string("companion")]),
         ConfigEntry(id: "identity", kind: .identity, config: defaultIdentity),
         ConfigEntry(id: "memory", kind: .memory, config: defaultMemory),
         ConfigEntry(id: "settings", kind: .settings, config: defaultSettings),
     ])
+
+    /// This tree with each factory harness it doesn't have yet, as the factory has it.
+    public func addingMissingHarnesses() -> ConfigTree {
+        var tree = self
+        for entry in Self.factory.harnessEntries where tree[entry.id] == nil {
+            let at = tree.entries.lastIndex { $0.kind == .harness }.map { $0 + 1 } ?? 0
+            tree.entries.insert(entry, at: at)
+        }
+        return tree
+    }
 
     /// "Reset to new hire": the factory identity, memory, settings and no skills, keeping what the human owns
     /// (the harness entries, the provider and how she listens: `Governance.humanSettingsKeys`).
@@ -240,7 +251,12 @@ public struct CompanionStore: Sendable {
     /// An unreadable `config.json` is moved aside to `config.unreadable.json` rather than overwritten.
     public func loadTree(legacyDefaults: UserDefaults?, factory: HarnessFactory = .standard) -> ConfigTree {
         if let data = try? Data(contentsOf: configFile) {
-            if let tree = try? JSONDecoder().decode(ConfigTree.self, from: data) { return tree }
+            if let tree = try? JSONDecoder().decode(ConfigTree.self, from: data) {
+                // A harness a later version brought (her own app's controls, in 0.3) joins a tree written before it.
+                let upgraded = tree.addingMissingHarnesses()
+                if upgraded != tree { try? save(upgraded) }
+                return upgraded
+            }
             let aside = directory.appendingPathComponent("config.unreadable.json")
             try? FileManager.default.removeItem(at: aside)
             try? FileManager.default.moveItem(at: configFile, to: aside)

@@ -21,6 +21,7 @@ One JSON file is the authoritative record of what runs:
     {"id": "harness.mac",   "kind": "harness",  "config": {"harness": "mac", "appleScript": false}},
     {"id": "harness.herdr", "kind": "harness",  "config": {"harness": "herdr"}},
     {"id": "harness.shell", "kind": "harness",  "config": {"harness": "shell"}, "disabled": true},
+    {"id": "harness.companion", "kind": "harness", "config": {"harness": "companion"}},
     {"id": "identity",      "kind": "identity", "config": {"name": "Companion", "role": "...", "personality": "...",
                                                             "instructions": ""}},
     {"id": "memory",        "kind": "memory",   "config": {"facts": []}},
@@ -40,7 +41,14 @@ One JSON file is the authoritative record of what runs:
   the shell or AppleScript), the confirmation policy and API keys are human-owned: only the app's own UI changes them.
   This answers the paper's write-back and interception caveats (p.65, p.72): a component never writes the tree.
 - API keys stay in the Keychain, never in the tree. `settings.provider` (which voice model, which bill) is in the tree
-  and human-owned.
+  and human-owned, as are how she listens (`settings.activation`, `activationKey`, `followUpSeconds`, `wakePhrase`)
+  and the look (`accent`): `Governance.humanSettingsKeys`, kept by a reset and by her own reverts.
+- **Her own app by voice.** `harness.companion` (0.3) offers the app's session, phone screens and settings as tools.
+  Its calls are the human's edits made by voice, applied through the human-edit path and logged as the user's
+  ("… (by voice)"), never proposals: proposals still can't touch human-owned paths. They apply at once when the user
+  asked, and wait for a spoken yes when the model acts on anything else; what raises her power or the bill (the voice
+  model, switching on a harness, AppleScript or the shell, a reset) always waits for one. A tree written before 0.3
+  gets the entry when it's loaded.
 - **What is active is runtime state, not configuration.** Which skills and harness controls are loaded into the
   live session lives in the registry; routing never writes the tree, and reconcile never changes activation. An
   entry's `disabled` is human-owned and persisted. (Keeping routing out of the tree is what keeps confluence true.)

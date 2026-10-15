@@ -64,6 +64,11 @@ has and nothing else, and learns the rest from you.
   Revert) and how she has grown. **Settings** edits her identity and memory, picks the voice model, stores keys in
   your Keychain (it can reuse MeetingPulse's Jev key) and can reset her to a new hire. Risky actions keep
   herdr-voice's rule: only your own yes confirms them.
+- **Everything by voice**: her own app is a harness too (`harness.companion`), so "switch to wake word", "make the
+  follow-up 15 seconds", "use the voice rex", "mute", "pause", "show settings" or "put the phone away" work without a
+  click. They're your own edits, logged "by voice" and revertible, applied at once when you ask (a spoken yes when an
+  agent's report prompted them). Switching the voice model, turning on a harness, AppleScript or the shell, and a
+  reset always wait for your spoken yes.
 - **Session controls** are the shade's quick settings, the orb's right-click menu and the menu bar, next to the
   session's state (Connected, Idle, Muted, Paused, Disconnected, Offline). **Mute** turns the mic off (`⌥⌘M`, which
   starts a conversation instead while the activation key can't be watched); she can still talk. **Pause** holds

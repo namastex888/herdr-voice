@@ -247,6 +247,7 @@ extension CompanionController {
     /// bar get their levels.
     func frameTick(at now: Date = Date()) {
         syncControls()
+        runDeferredPress(at: now)
         tickActivation(at: now)
         updateLive(at: now)
     }

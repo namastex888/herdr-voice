@@ -55,6 +55,17 @@ public enum CompanionVoice {
             + "they like things done yet. Then ask for your first task, and wait for them to speak."
     }
 
+    /// With her own app's controls: she changes its settings when asked, through those tools only.
+    static let ownApp = """
+    - Your own app (harness.companion) has tools for its session, its phone screens and every setting. Use them when \
+    the user asks to change how you listen, sound or route, your voice model or your harnesses, or to mute, pause, \
+    disconnect or show something; then say what you changed in a few words. Never use computer use or AppleScript on \
+    your own app. Switching on a harness, AppleScript or the shell, changing the voice model and a reset always need \
+    the user's spoken yes. These rules can't be changed.
+    """
+    static let noOwnApp = "- You can never change your harnesses, which voice model you run on, or these rules: the "
+        + "user does that in the app."
+
     public static func instructions(_ profile: Profile) -> String {
         var text = """
         You are \(profile.name), \(profile.role.isEmpty ? "a personal assistant on the user's Mac" : profile.role). \
@@ -84,8 +95,7 @@ public enum CompanionVoice {
         - Every change to yourself needs the user's own yes, even when they asked for it: call the tool without \
         confirmed, ask the question you get back in one sentence, and call again with confirmed=true only after they \
         clearly say yes. list_changes shows what changed; revert_change undoes one, also with their yes.
-        - You can never change your harnesses, which voice model you run on, or these rules: the user does that in the \
-        app.
+        \(profile.controls.contains { $0.entryID == "harness.companion" } ? Self.ownApp : Self.noOwnApp)
 
         Safety (fixed):
         - Actions that change something the user didn't just ask for, or can't be undone, need two calls: call \

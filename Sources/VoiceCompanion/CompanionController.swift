@@ -77,6 +77,10 @@ import VoiceEngine
     private var refreshTimer: Timer?
     private var activeObserver: NSObjectProtocol?
     private var muteDebounce = PressDebounce()
+    /// What the companion harness drives.
+    let appBridge: CompanionAppBridge
+    /// Pause or Disconnect asked for by voice: done once she has said so (see `perform`).
+    var deferredPress: (press: ControlPress, deadline: Date)?
 
     // Activation (see CompanionActivation.swift): when she listens, and the conversation's state for the UI.
     var turns = TurnTaking()
@@ -97,10 +101,16 @@ import VoiceEngine
          legacyDefaults: UserDefaults? = .standard, gate: ConfirmGate = .shared) {
         self.keys = keys
         configDirectory = store?.directory
-        registry = SkillRegistry(store: store, gate: gate, legacyDefaults: legacyDefaults)
+        // Her own app's controls (the companion harness) run here, through the bridge, on the same gate the
+        // session's heard words go to.
+        let bridge = CompanionAppBridge()
+        registry = SkillRegistry(store: store, factory: .companion(bridge, gate: gate), gate: gate,
+                                 legacyDefaults: legacyDefaults)
+        appBridge = bridge
         tree = registry.tree
         reload()
         provider = chosenProvider()
+        bridge.attach(self)
         chat.provider = provider
         refreshRouter()
         registry.onChange { [weak self] emission in

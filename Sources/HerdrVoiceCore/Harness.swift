@@ -33,7 +33,8 @@ public struct HarnessFactory: Sendable {
     }
 
     /// `mac` (`appleScript` in its config turns on run_applescript), `herdr`, `shell` (on unless its entry is
-    /// disabled, which the human owns).
+    /// disabled, which the human owns), and `companion`, which needs the app to run in (`companion(_:)`) and is
+    /// unavailable here.
     public static let standard = HarnessFactory { name, config in
         switch name {
         case "mac":
@@ -43,6 +44,7 @@ public struct HarnessFactory: Sendable {
             return MacHarness(allowAppleScript: config["appleScript"]?.bool ?? false)
         case "herdr": return HerdrHarness()
         case "shell": return ShellHarness(enabled: true)
+        case "companion": return CompanionHarness(app: nil)
         default: throw ComponentError("there is no harness called \(name)")
         }
     }

@@ -102,6 +102,7 @@ import VoiceEngine
 
     let session = checkSessionControls(controller, check)
     checkActivation(controller, session, check)
+    checkVoiceControl(controller, session, gate, check)
 
     window.panel.orderOut(nil)
     print(failures == 0 ? "all checks passed" : "\(failures) check(s) failed")
@@ -265,6 +266,50 @@ import VoiceEngine
     controller.phone.shadeOpen = false
     check("every screen renders: lock, home, messages, settings, skills, an app, the shade, the orb and the morph",
           blank.isEmpty, blank.isEmpty ? drawn.joined(separator: ", ") : "blank: " + blank.joined(separator: ", "))
+}
+
+/// Her own app by voice: the companion harness's tools change settings as your edits (by voice), drive the
+/// session and the phone, and stop for a spoken yes where they raise her power.
+@MainActor private func checkVoiceControl(_ controller: CompanionController, _ session: Realtime, _ gate: ConfirmGate,
+                                          _ check: (String, Bool, String) -> Void) {
+    let registry = controller.registry
+    func say(_ tool: String, _ arguments: [String: Any] = [:]) -> String {
+        let out = registry.call(tool, arguments: json(arguments), userInitiated: true).output
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05)) // the settle reaches the controller
+        return out
+    }
+    check("her app's controls are tools she has from the first turn",
+          ["set_activation", "show_screen", "mute_mic", "set_model"].allSatisfy(registry.activeTools.names.contains),
+          "\(registry.activeTools.names.count) tools")
+
+    let changes = registry.changes.count
+    let followUp = say("set_follow_up", ["seconds": 12])
+    check("a setting said aloud applies at once, as your edit by voice",
+          followUp.hasPrefix("Done") && controller.settings.followUpSeconds == 12 && controller.turns.timing.followUp == 12
+              && registry.changes.count == changes + 1 && registry.changes.last?.summary.hasSuffix("(by voice)") == true,
+          followUp)
+
+    _ = say("show_screen", ["screen": "settings"])
+    let shown = controller.phone.expanded && controller.phone.screen == .settings
+    _ = say("collapse_phone")
+    check("she shows a screen and puts the phone away by voice", shown && !controller.phone.expanded, "")
+
+    _ = say("mute_mic", ["on": true])
+    let muted = session.muted && !session.micOpen
+    _ = say("mute_mic", ["on": false])
+    _ = say("pause_session")
+    controller.runDeferredPress(at: Date()) // she has finished saying so
+    let paused = session.paused
+    _ = say("resume_session")
+    check("mute, pause and resume by voice reach the session", muted && paused && !session.paused && !session.muted, "")
+
+    let model = say("set_model", ["provider": "openai"])
+    gate.heard("no")
+    let shell = say("set_shell", ["on": true])
+    gate.heard("no")
+    check("switching the model or the shell on by voice still needs your spoken yes",
+          model.hasPrefix("CONFIRMATION REQUIRED") && shell.hasPrefix("CONFIRMATION REQUIRED")
+              && controller.settings.provider == nil && registry.tree["harness.shell"]?.disabled == true, model)
 }
 
 private func json(_ object: [String: Any]) -> String {
