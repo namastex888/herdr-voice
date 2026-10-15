@@ -23,7 +23,10 @@ import os
     /// Each of the user's turns, spoken or typed, as soon as its text is known (the companion routes skills on it).
     public var onUserTurn: ((String) -> Void)?
 
-    public private(set) var provider: Provider
+    public private(set) var provider: Provider { didSet { capabilities = provider.capabilities } }
+    /// The provider's protocol differences. Follows `provider` rather than `wire`: while a switch is still preparing,
+    /// the mic and the events it raises already belong to the new provider, though its wire doesn't exist yet.
+    private var capabilities: WireCapabilities
     private var key: String
     private var voice: String
     private var requestOverride: URLRequest?
@@ -154,12 +157,13 @@ import os
         let wire: Wire
         let socket: URLSessionWebSocketTask?
         let connection: Int
-        let local: Bool
+        let onsets: Bool
     }
     /// Shared between the mic queue and main.
     private struct MicShared {
         var muted = false
-        var local = false
+        /// The provider detects no speech (`explicitSpeechOnsets`): the gate marks utterances and speech events.
+        var onsets = false
         var mayStream = false
         /// The provider has heard speech start and not yet end: keep streaming so it sees the turn finish.
         var midTurn = false
@@ -174,7 +178,7 @@ import os
         /// The last time the mic heard a speech-loud chunk (above the gate's opening level).
         var lastLoud = Date.distantPast
 
-        var link: MicLink? { wire.map { MicLink(wire: $0, socket: socket, connection: connection, local: local) } }
+        var link: MicLink? { wire.map { MicLink(wire: $0, socket: socket, connection: connection, onsets: onsets) } }
     }
     private nonisolated let micShared = OSAllocatedUnfairLock(initialState: MicShared())
     /// Closed on purpose because nobody was talking; any speech (or an agent report) reopens it.
@@ -201,11 +205,15 @@ import os
         self.greeting = greeting
         self.tools = host.tools
         // Local with no runtime yet: stay closed until completeProviderSwitch brings the loaded runtime's request.
+        // (The helper process, not the protocol: nothing to connect to until it is up.)
         self.providerPreparing = provider == .local && request == nil
-        self.wire = provider.makeWire()
-        let policy: SpeechGate<String>.Policy = provider == .local ? .local : .cloud
+        let wire = provider.makeWire()
+        self.wire = wire
+        self.capabilities = wire.capabilities
+        let onsets = wire.capabilities.explicitSpeechOnsets
+        let policy: SpeechGate<String>.Policy = onsets ? .local : .cloud
         micLocal.withLock { $0.gate.policy = policy }
-        micShared.withLock { $0.local = provider == .local }
+        micShared.withLock { $0.onsets = onsets }
         audio.onMic = { [weak self] b64, level in self?.micChunk(b64, level: level) }
     }
 
@@ -228,11 +236,13 @@ import os
 
     /// On the mic queue, every 20 ms.
     private nonisolated func micChunk(_ b64: String, level: Float) {
-        let (muted, midTurn, local) = micShared.withLock { ($0.muted, $0.midTurn, $0.local) }
+        // With explicit onsets the gate is the only speech detector: always on, echo-guarded, never held open by
+        // the provider, and its openings and closings are the utterance boundaries.
+        let (muted, midTurn, onsets) = micShared.withLock { ($0.muted, $0.midTurn, $0.onsets) }
         let playback = audio.outLevel
         let gated = gated, gateDebug = gateDebug, echoRatio = echoRatio
         let gateStep = micLocal.withLock { m -> GateStep? in
-            let wantedPolicy: SpeechGate<String>.Policy = local ? .local : .cloud
+            let wantedPolicy: SpeechGate<String>.Policy = onsets ? .local : .cloud
             if m.gate.policy != wantedPolicy {
                 m.gate.policy = wantedPolicy
                 m.gate.reset()
@@ -244,10 +254,10 @@ import os
             var step = GateStep()
             let wasOpen = m.gate.isOpen
             m.echoReference = EchoGuard.reference(previous: m.echoReference, playback: playback)
-            let gateLevel = local ? EchoGuard.level(level, playback: m.echoReference, floor: m.gate.noiseFloor, ratio: echoRatio) : level
+            let gateLevel = onsets ? EchoGuard.level(level, playback: m.echoReference, floor: m.gate.noiseFloor, ratio: echoRatio) : level
             step.loud = gated && gateLevel > m.gate.openThreshold
-            step.useGate = gated || local
-            step.chunks = step.useGate ? m.gate.process(b64, level: gateLevel, holdOpen: local ? false : midTurn) : [b64]
+            step.useGate = gated || onsets
+            step.chunks = step.useGate ? m.gate.process(b64, level: gateLevel, holdOpen: onsets ? false : midTurn) : [b64]
             step.opened = m.gate.isOpen && !wasOpen
             step.closed = wasOpen && !m.gate.isOpen
             if gateDebug && step.useGate {
@@ -266,7 +276,7 @@ import os
             let send = { (command: WireCommand) in
                 if let socket = link.socket { self.transmit(link.wire.encode(command), on: socket, connection: link.connection) }
             }
-            if link.local && opened {
+            if link.onsets && opened {
                 send(.inputStarted(utteranceID: UUID().uuidString))
                 DispatchQueue.main.async { self.handle(.speechStarted) }
             }
@@ -274,7 +284,7 @@ import os
             // The gate just closed: tell the provider the stream paused (Gemini ends the turn on it).
             if closed {
                 send(.audioPaused)
-                if link.local { DispatchQueue.main.async { self.handle(.speechStopped) } }
+                if link.onsets { DispatchQueue.main.async { self.handle(.speechStopped) } }
             }
         }
         if let link = micShared.withLock({ $0.mayStream ? $0.link : nil }) {
@@ -282,24 +292,24 @@ import os
             return
         }
         // No session right now (closed while quiet, warming, or reconnecting): retain at most ten seconds.
-        let held = micShared.withLock { state -> (link: MicLink?, local: Bool) in
+        let held = micShared.withLock { state -> (link: MicLink?, onsets: Bool) in
             if state.mayStream {
-                return (state.link, state.local)
+                return (state.link, state.onsets)
             }
-            if state.local {
+            if state.onsets {
                 state.held.appendLocal(chunks, opened: opened, closed: closed, utteranceID: UUID().uuidString)
             } else {
                 state.held.appendCloud(chunks, opened: opened, closed: closed)
             }
             state.lastSpeech = Date()
-            return (nil, state.local)
+            return (nil, state.onsets)
         }
         if let link = held.link {
             stream(link)
             return
         }
-        if held.local && opened { DispatchQueue.main.async { self.handle(.speechStarted) } }
-        if held.local && closed { DispatchQueue.main.async { self.handle(.speechStopped) } }
+        if held.onsets && opened { DispatchQueue.main.async { self.handle(.speechStarted) } }
+        if held.onsets && closed { DispatchQueue.main.async { self.handle(.speechStopped) } }
         DispatchQueue.main.async { self.wake() }
     }
 
@@ -334,12 +344,12 @@ import os
         }
     }
 
-    /// Every 5 s: close a session nobody has talked to for `quietClose`, if nothing is speaking or running.
+    /// Every 5 s: close a metered session nobody has talked to for `quietClose`, if nothing is speaking or running.
     private func startQuietTimer() {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 5, repeating: 5, leeway: .seconds(1))
         timer.setEventHandler { [weak self] in
-            guard let self, self.status == .live, self.established, self.provider != .local else { return }
+            guard let self, self.status == .live, self.established, self.capabilities.metered else { return }
             let quietFor = Date().timeIntervalSince(self.micShared.withLock { $0.lastSpeech })
             guard quietFor > Self.quietClose, !self.responseActive, !self.audio.isSpeaking,
                   self.toolsRunning == 0, self.outbox.isEmpty else { return }
@@ -411,7 +421,7 @@ import os
         startKeepalive(task)
     }
 
-    /// The first server event on a socket: the session is really up.
+    /// The first server event on a socket (with a `setupHandshake`, the setup's acknowledgement): the session is up.
     private func sessionEstablished() {
         note(hadSession ? "↻ reconnected" : "● connected")
         // Speech held while the session reopened goes first, before live audio starts flowing.
@@ -423,11 +433,14 @@ import os
             send(.userText(context, expectsReply: false))
         }
         hadSession = true
-        if greetNext, !(provider == .local && heardDuringHandshake) {
+        // With explicit onsets, speech held through the handshake was just replayed as a whole utterance, and the
+        // session asks for its reply itself: you spoke first, so that reply replaces the greeting.
+        let answeringYou = capabilities.explicitSpeechOnsets && heardDuringHandshake
+        if greetNext, !answeringYou {
             greetNext = false
             addReplyText(greeting)
             if replies.wantReply() { requestResponse() }
-        } else if provider == .local && heardDuringHandshake {
+        } else if answeringYou {
             greetNext = false
         }
         guard !outbox.isEmpty else { return }
@@ -604,7 +617,8 @@ import os
         audio.setMuted(muted)
         if muted {
             send(.clearInput)
-            if provider == .local {
+            // Clearing starts a new epoch: the provider drops the reply in progress without a response.done.
+            if capabilities.turnEpochs {
                 replies.reset()
                 awaitingCreated = false
                 awaitingReplySince = nil
@@ -674,7 +688,7 @@ import os
                         let events = self.wire.decode(text)
                         if self.debugEvents { self.logEvents(events) }
                         if !self.established,
-                           self.provider != .local || events.contains(.sessionReady) {
+                           !self.capabilities.setupHandshake || events.contains(.sessionReady) {
                             self.sessionEstablished()
                         }
                         events.forEach(self.handle)
@@ -735,8 +749,8 @@ import os
             // The server may already be answering the "stop" itself; cancel that too.
             if StopCommand.matches(t) {
                 stopSpeech(reason: "you said stop")
-            } else if provider == .local, replies.wantReply() {
-                requestResponse()
+            } else if capabilities.explicitSpeechOnsets, replies.wantReply() {
+                requestResponse() // no server VAD to answer a finished utterance by itself
             }
         case .speechStopped:
             if !muted { awaitingReplySince = Date() }
@@ -749,8 +763,8 @@ import os
             // Barge-in: talking over the assistant cuts its audio; the server VAD handles the rest. The provider also
             // hears the voice's own echo and noise as speech, so only cut when this mic heard a loud onset too.
             let heard = !gated || micShared.withLock { Date().timeIntervalSince($0.lastLoud) < Self.bargeInWindow }
-            if provider == .local {
-                // Every local onset starts a new epoch and the bridge cancels everything older, heard or not, so
+            if capabilities.turnEpochs {
+                // Every onset starts a new epoch and the provider cancels everything older, heard or not, so
                 // no response.created/done or reply from before it will arrive; waiting on one would stall replies.
                 if responseActive { send(.cancelReply) }
                 replies.reset()
@@ -765,8 +779,10 @@ import os
         case .localFunctionCall(let epoch, let callID, let name, let args):
             runTool(callID: callID, name: name, args: args, epoch: epoch)
         case .error(let msg):
-            if provider == .local, !established {
-                note("✖ Local OpenLive handshake failed: \(msg)")
+            if capabilities.setupHandshake, !established {
+                // The setup was refused (a protocol or tool-manifest mismatch): the same setup would be refused
+                // again, so stay closed until the provider is prepared afresh (for Local, its helper relaunched).
+                note("✖ \(provider.menuTitle) handshake failed: \(msg)")
                 let failed = socket
                 socket = nil
                 failed?.cancel(with: .protocolError, reason: nil)
@@ -813,6 +829,7 @@ import os
     @discardableResult
     public func beginProviderSwitch(to newProvider: Provider, voice newVoice: String) -> Bool {
         if newProvider == provider {
+            // Picking Local again while it's down relaunches its helper process (a helper matter, not a protocol one).
             guard provider == .local, status == .disconnected else { return false }
             connection += 1 // invalidate a retry aimed at the old sidecar port
             retryPending = false
@@ -837,8 +854,9 @@ import os
         key = ""
         voice = newVoice
         requestOverride = nil
+        let onsets = capabilities.explicitSpeechOnsets // already the new provider's
         micShared.withLock {
-            $0.local = newProvider == .local
+            $0.onsets = onsets
             $0.midTurn = false
             $0.wire = nil
             $0.socket = nil
@@ -926,7 +944,7 @@ import os
     }
 
     private func runTool(callID: String, name: String, args: String, epoch: Int?) {
-        if let epoch, let local = wire as? LocalWire, !local.isCurrent(epoch: epoch) {
+        if let epoch, !wire.isCurrent(epoch: epoch) {
             addToolOutput(ToolOutput(callID: callID, name: name,
                                      output: "Cancelled because a newer microphone turn began.", epoch: epoch))
             return
@@ -960,14 +978,9 @@ import os
                 if let pane = outcome.paneWatch { self.watchPane(pane) }
                 // A result for a call from a session that has since closed has nowhere to go.
                 guard self.connection == id, self.status == .live else { return }
-                if let epoch {
-                    guard let local = self.wire as? LocalWire else { return }
-                    self.addToolOutput(ToolOutput(callID: callID, name: name, output: outcome.output, epoch: epoch))
-                    // The old call may replace its history placeholder, but it cannot schedule a reply in a newer turn.
-                    guard local.isCurrent(epoch: epoch) else { return }
-                } else {
-                    self.addToolOutput(ToolOutput(callID: callID, name: name, output: outcome.output))
-                }
+                self.addToolOutput(ToolOutput(callID: callID, name: name, output: outcome.output, epoch: epoch))
+                // An epoch's old call may replace its history placeholder, but it cannot schedule a reply in a newer turn.
+                if let epoch, !self.wire.isCurrent(epoch: epoch) { return }
                 // One reply once every call from this turn has answered, not one per call.
                 if self.replies.callFinished() { self.requestResponse() }
             }

@@ -37,7 +37,13 @@ public extension HerdrTools {
 /// Herdr's authenticated loopback protocol for the OpenLive inference host.
 /// Every turn event carries an epoch. The epoch drops results from cancelled GPU work.
 public final class LocalWire: Wire, @unchecked Sendable { // epoch and utteranceID live under `lock`
-    public let capabilities = WireCapabilities(explicitReplies: true, nativeResumption: false)
+    /// The helper detects no speech (the session's gate does), fences turns by epoch, acknowledges the handshake,
+    /// and costs nothing to keep open.
+    public let capabilities = WireCapabilities(explicitReplies: true, nativeResumption: false,
+                                               explicitSpeechOnsets: true, turnEpochs: true,
+                                               setupHandshake: true, metered: false)
+    /// The brain the helper runs unless HERDR_LOCAL_BRAIN_MODEL names another (see LocalRuntime).
+    public static let defaultBrainModel = "qwen3.5:4b"
 
     private let lock = NSLock()
     private var epoch = 0
