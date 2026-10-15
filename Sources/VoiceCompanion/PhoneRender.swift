@@ -25,7 +25,8 @@ import VoiceEngine
             Shot(name: "morph", screen: .lock, morph: 0.45, frame: listening),
             Shot(name: "lock", screen: .lock),
             Shot(name: "home", screen: .home),
-            Shot(name: "messages", screen: .messages),
+            Shot(name: "chat", screen: .messages),
+            Shot(name: "conversations", screen: .conversations),
             Shot(name: "settings", screen: .settings),
             Shot(name: "skills", screen: .skills),
             Shot(name: "shade", screen: .home, shade: true),
@@ -77,7 +78,8 @@ import VoiceEngine
     let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("vc-render-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: scratch) }
     let controller = CompanionController(store: CompanionStore(directory: scratch), legacyDefaults: nil,
-                                         gate: ConfirmGate(minDelay: 0, wait: 0))
+                                         gate: ConfirmGate(minDelay: 0, wait: 0),
+                                         home: VoxHome(root: scratch.appendingPathComponent("vox")))
     stageDemo(controller)
     let folder = URL(fileURLWithPath: directory)
     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -135,6 +137,32 @@ import VoiceEngine
     chat.append(.you("When I say focus, turn on dark mode"))
     chat.append(.voice("Want me to learn that as a skill called Focus?"))
     chat.append(.note("← claude-code settled"))
+    stageVoiceNotes(controller)
+}
+
+/// A short spoken exchange through the recorder, as the session would feed it: your speech as sent, her audio as
+/// played, both transcripts, and a typed turn; then the conversation ends and is saved.
+@MainActor func stageVoiceNotes(_ controller: CompanionController) {
+    let recorder = controller.recorder, now = Date()
+    recorder.mic(syntheticSpeech(seconds: 1.6, seed: 1), at: now)
+    recorder.played(syntheticSpeech(seconds: 2.4, seed: 2), item: "item-1", at: now.addingTimeInterval(2))
+    recorder.heard(.voice("Done: Safari's open and the volume is at 30."), at: now.addingTimeInterval(2.2))
+    recorder.heard(.you("Open Safari and set the volume to 30"), at: now.addingTimeInterval(2.3))
+    recorder.typed("Thanks!", at: now.addingTimeInterval(6))
+    recorder.end(at: now.addingTimeInterval(7))
+    recorder.drain()
+    RunLoop.main.run(until: Date().addingTimeInterval(0.1)) // the saved list reaches main
+}
+
+/// Speech-like PCM16 24 kHz: a tone whose loudness rises and falls like syllables.
+func syntheticSpeech(seconds: Double, seed: Double) -> Data {
+    let count = Int(seconds * Double(PCM.rate))
+    var samples = (0..<count).map { i -> Int16 in
+        let t = Double(i) / Double(PCM.rate)
+        let envelope = 0.15 + 0.85 * abs(sin(t * (3.1 + seed) + seed)) * abs(sin(t * 0.9 + seed * 2))
+        return Int16(0.4 * envelope * 32767 * sin(t * 2 * .pi * (180 + 40 * seed))).littleEndian
+    }
+    return Data(bytes: &samples, count: count * 2)
 }
 
 @MainActor private func stageConversation(_ controller: CompanionController) {

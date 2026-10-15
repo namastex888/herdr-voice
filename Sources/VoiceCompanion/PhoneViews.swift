@@ -244,7 +244,11 @@ struct PhoneBody: View {
         switch model.screen {
         case .lock: LockScreen(controller: controller, chat: chat, model: model)
         case .home: HomeScreen(controller: controller, model: model)
-        case .messages: MessagesScreen(controller: controller, chat: chat, model: model)
+        case .messages: VoiceChatScreen(controller: controller, chat: chat, recorder: controller.recorder,
+                                        player: controller.player, model: model)
+        case .conversations: ConversationsScreen(controller: controller, recorder: controller.recorder, model: model)
+        case .conversation(let id): SavedConversationScreen(recorder: controller.recorder, player: controller.player,
+                                                            model: model, id: id)
         case .settings: SettingsScreen(controller: controller, keys: controller.keys, model: model)
         case .skills: SkillsScreen(controller: controller, chat: chat, model: model)
         case .app(let id): AppScreen(controller: controller, model: model, id: id)

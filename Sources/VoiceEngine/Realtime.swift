@@ -1316,10 +1316,21 @@ import os
         transmit([obj], on: socket, connection: connection)
     }
 
+    /// The mic audio the session sends, chunk by chunk (base64 PCM16 24 kHz), as it goes out: whatever the gate let
+    /// through, live or held, and nothing muted, paused or on standby. The companion keeps it as the user's voice
+    /// notes. Set from main; called wherever frames are sent (the mic queue or main).
+    private nonisolated let sentMicTap = OSAllocatedUnfairLock<(@Sendable (String) -> Void)?>(initialState: nil)
+
+    public nonisolated func setSentMicTap(_ tap: (@Sendable (String) -> Void)?) {
+        sentMicTap.withLock { $0 = tap }
+    }
+
     /// Sends frames on `socket`, which belongs to `connection`. Nonisolated so the mic queue can stream with the
     /// socket it read under `micShared`.
     private nonisolated func transmit(_ frames: [[String: Any]], on socket: URLSessionWebSocketTask, connection id: Int) {
+        let tap = sentMicTap.withLock { $0 }
         for obj in frames {
+            if let tap, let audio = WireFrame.micAudio(in: obj) { tap(audio) }
             guard let data = try? JSONSerialization.data(withJSONObject: obj) else { continue }
             socket.send(.string(String(decoding: data, as: UTF8.self))) { [weak self] err in
                 guard let err else { return }

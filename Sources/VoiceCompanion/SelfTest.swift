@@ -22,7 +22,8 @@ import VoiceEngine
     defer { try? FileManager.default.removeItem(at: scratch) }
     // Its own gate, answering at once: the user's "no" below clears each question before the next is asked.
     let gate = ConfirmGate(minDelay: 0, wait: 0)
-    let controller = CompanionController(store: CompanionStore(directory: scratch), legacyDefaults: nil, gate: gate)
+    let controller = CompanionController(store: CompanionStore(directory: scratch), legacyDefaults: nil, gate: gate,
+                                         home: VoxHome(root: scratch.appendingPathComponent("vox")))
     let registry = controller.registry
 
     let window = PhoneWindow(model: controller.phone, content: PhoneRoot(controller: controller, model: controller.phone,
@@ -98,12 +99,12 @@ import VoiceEngine
     check("your edits apply, revert, and reset to a new hire", edited && reverted && registry.tree == .factory,
           controller.notice)
 
-    checkPhone(controller, window, check)
-
     let session = checkSessionControls(controller, check)
     checkActivation(controller, session, check)
     checkVoiceControl(controller, session, gate, check)
     checkVoiceMode(controller, session, gate, check)
+    checkVoiceChat(controller, check)
+    checkPhone(controller, window, check)
 
     window.panel.orderOut(nil)
     print(failures == 0 ? "all checks passed" : "\(failures) check(s) failed")
@@ -246,7 +247,7 @@ import VoiceEngine
     check("the orb grows into the phone, anchored at its corner",
           controller.phone.expanded && controller.phone.morph == 1 && open.height >= PhoneWindow.phoneSize.height
               && window.panel.canBecomeKey, "\(Int(open.width))×\(Int(open.height))")
-    for name in ["lock", "home", "messages", "settings", "skills"] {
+    for name in ["lock", "home", "chat", "conversations", "settings", "skills"] {
         controller.phone.go(PhoneScreen.named[name] ?? .home)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
@@ -266,8 +267,8 @@ import VoiceEngine
     controller.phone.morph = 0
     controller.phone.expanded = false
     controller.phone.shadeOpen = false
-    check("every screen renders: lock, home, messages, settings, skills, an app, the shade, the orb and the morph",
-          blank.isEmpty, blank.isEmpty ? drawn.joined(separator: ", ") : "blank: " + blank.joined(separator: ", "))
+    check("every screen renders: " + PhoneRender.shots(appID: "harness.mac").map(\.name).joined(separator: ", "),
+          blank.isEmpty, blank.isEmpty ? "\(drawn.count) drawn" : "blank: " + blank.joined(separator: ", "))
 }
 
 /// Her own app by voice: the companion harness's tools change settings as your edits (by voice), drive the
@@ -312,6 +313,49 @@ import VoiceEngine
     check("switching the model or the shell on by voice still needs your spoken yes",
           model.hasPrefix("CONFIRMATION REQUIRED") && shell.hasPrefix("CONFIRMATION REQUIRED")
               && controller.settings.provider == nil && registry.tree["harness.shell"]?.disabled == true, model)
+}
+
+/// The voice chat: a spoken exchange becomes two voice notes with transcripts, saved as WAV files and a transcript
+/// under the (scratch) conversations folder; nothing muted or paused is kept; one conversation or all can be deleted.
+@MainActor private func checkVoiceChat(_ controller: CompanionController, _ check: (String, Bool, String) -> Void) {
+    let recorder = controller.recorder, store = recorder.store
+    recorder.end() // the typed turns of the checks above were a conversation of their own
+    recorder.deleteAll()
+    recorder.drain()
+    stageVoiceNotes(controller)
+    let saved = store.list()
+    let transcript = saved.first
+    let files = transcript.map { t in t.clips.compactMap { store.audioURL($0, in: t.id) } } ?? []
+    check("a spoken exchange is kept as voice notes: your audio, hers, both transcripts and a typed turn",
+          saved.count == 1 && transcript?.clips.map(\.side) == [.user, .vox, .user]
+              && transcript?.clips.map(\.text) == ["Open Safari and set the volume to 30",
+                                                   "Done: Safari's open and the volume is at 30.", "Thanks!"]
+              && files.count == 2 && files.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
+              && store.root.path.hasPrefix(FileManager.default.temporaryDirectory.path),
+          transcript.map { "\($0.id): \($0.clips.count) notes, \(files.count) audio files" } ?? "nothing saved")
+
+    controller.press(.mute(true))
+    recorder.mic(syntheticSpeech(seconds: 0.5, seed: 3))
+    controller.press(.mute(false))
+    controller.press(.pause(true))
+    recorder.mic(syntheticSpeech(seconds: 0.5, seed: 4))
+    controller.press(.pause(false))
+    check("muted or paused, the mic is never kept", recorder.clips.count == 3 && recorder.clips.last?.typed == true,
+          "\(recorder.clips.count) notes")
+
+    recorder.mic(syntheticSpeech(seconds: 0.4, seed: 5))
+    recorder.heard(.you("A second conversation"))
+    recorder.end()
+    recorder.drain()
+    let two = store.list().count
+    if let first = transcript?.id { recorder.delete(first) }
+    recorder.drain()
+    let one = store.list().count
+    recorder.deleteAll()
+    recorder.drain()
+    check("conversations are kept until you delete one, or all", two == 2 && one == 1 && store.list().isEmpty,
+          "\(two) → \(one) → \(store.list().count)")
+    stageVoiceNotes(controller) // for the screens below
 }
 
 /// Voice mode: a tap lights the orb without the phone; the phone rises for what she shows or asks, and goes back

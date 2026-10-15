@@ -9,7 +9,11 @@ enum PhoneScreen: Hashable {
     /// The clock and what came in: where a conversation started by voice opens.
     case lock
     case home
+    /// The voice chat: the current conversation as voice notes.
     case messages
+    /// The kept conversations, and one of them by id.
+    case conversations
+    case conversation(String)
     case settings
     /// What she controls, what she knows, how she changed.
     case skills
@@ -18,7 +22,8 @@ enum PhoneScreen: Hashable {
 
     /// The screens the voice and the self-test name.
     static let named: [String: PhoneScreen] = [
-        "lock": .lock, "home": .home, "messages": .messages, "settings": .settings, "skills": .skills,
+        "lock": .lock, "home": .home, "messages": .messages, "chat": .messages, "conversations": .conversations,
+        "settings": .settings, "skills": .skills,
     ]
 }
 

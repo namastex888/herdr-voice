@@ -47,7 +47,7 @@ public struct CompanionHarness: Harness {
         case resetToNewHire
     }
 
-    public static let screens = ["home", "messages", "settings", "skills", "shade", "lock"]
+    public static let screens = ["home", "chat", "messages", "conversations", "settings", "skills", "shade", "lock"]
     static let followUpRange: ClosedRange<Double> = 3...60
 
     private let app: (any CompanionApp)?
@@ -312,8 +312,9 @@ public struct CompanionHarness: Harness {
             HerdrTools.fn("disconnect_session", "Close the voice session now, so billing stops; it stays closed until the "
                           + "user connects, taps or types.", ["confirmed": confirmed], []),
             HerdrTools.fn("stop_speaking", "Stop what she is saying.", ["confirmed": confirmed], []),
-            HerdrTools.fn("show_screen", "Open the phone on a screen: home, messages, settings, skills, shade (quick "
-                          + "settings and notifications) or lock. A tap only lights the orb; open the phone only when "
+            HerdrTools.fn("show_screen", "Open the phone on a screen: home (the cockpit), chat (this conversation as "
+                          + "voice notes), conversations (the kept ones), settings, skills, shade (the drawer: apps, "
+                          + "quick settings and notifications) or lock. A tap only lights the orb; open the phone only when "
                           + "there is something to see (a list, a link, a result), and it goes away by itself a few "
                           + "seconds after you finish talking about it.",
                           ["screen": ["type": "string", "enum": screens], "confirmed": confirmed], ["screen"]),

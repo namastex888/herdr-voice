@@ -44,11 +44,13 @@ extension CompanionController {
     /// stays put unless she has something to show (`show_screen`) or a question for you.
     func showConversation() {
         conversationStarted = Date()
+        player.stop() // a note played back through the speakers would talk over you
     }
 
     /// The conversation ended: what she put up goes back into the orb, unless you've used it or she still waits
     /// for your yes.
     func hideConversation() {
+        recorder.end()
         if minimizer.handle(.conversationEnded) { minimize() }
     }
 
@@ -91,7 +93,7 @@ extension CompanionController {
     }
 
     var dockApps: [PhoneApp] {
-        [PhoneApp(id: "messages", kind: .messages, title: "Messages", symbol: "bubble.left.and.text.bubble.right.fill"),
+        [PhoneApp(id: "messages", kind: .messages, title: "Chat", symbol: "waveform.and.person.filled"),
          PhoneApp(id: "talk", kind: .talk, title: "Talk", symbol: "mic.fill"),
          PhoneApp(id: "skills", kind: .skills, title: "Skills", symbol: "square.grid.2x2.fill"),
          PhoneApp(id: "settings", kind: .settings, title: "Settings", symbol: "gearshape.fill")]
@@ -251,6 +253,7 @@ extension CompanionController {
         runDeferredPress(at: now)
         tickActivation(at: now)
         tickMinimizer(at: now)
+        if !activationMode.opensOnRequest { recorder.tick(at: now) }
         updateLive(at: now)
     }
 

@@ -98,14 +98,21 @@ import VoiceEngine
     var voiceModeObservers: [Any] = []
     /// Where her questions wait for the user's own yes: while one waits, the phone stays up.
     let gate: ConfirmGate
+    /// `~/.vox`: the conversations and the day's numbers.
+    let home: VoxHome
+    /// The voice chat: both sides' voice notes, kept on disk until deleted.
+    let recorder: ConversationRecorder
+    let player = VoiceNotePlayer()
 
     /// `store` is where `config.json` lives; the first time it is built from 0.1.0's settings (`legacyDefaults`) and
     /// skills folder. nil keeps the configuration in memory. `gate` holds proposals until the human's own yes.
     init(keys: CompanionKeys = CompanionKeys(),
          store: CompanionStore? = CompanionStore(directory: CompanionStore.defaultDirectory),
-         legacyDefaults: UserDefaults? = .standard, gate: ConfirmGate = .shared) {
+         legacyDefaults: UserDefaults? = .standard, gate: ConfirmGate = .shared, home: VoxHome = .user) {
         self.keys = keys
         self.gate = gate
+        self.home = home
+        recorder = ConversationRecorder(store: ConversationStore(root: home.conversations))
         configDirectory = store?.directory
         // Her own app's controls (the companion harness) run here, through the bridge, on the same gate the
         // session's heard words go to.
@@ -118,6 +125,12 @@ import VoiceEngine
         provider = chosenProvider()
         bridge.attach(self)
         chat.provider = provider
+        recorder.provider = provider.rawValue
+        recorder.micAllowed = { [weak self] in
+            guard let session = self?.session else { return true }
+            return !session.muted && !session.paused
+        }
+        recorder.refreshSaved()
         refreshRouter()
         registry.onChange { [weak self] emission in
             DispatchQueue.main.async { self?.registryChanged(emission) }
@@ -215,8 +228,15 @@ import VoiceEngine
     func attach(_ session: Realtime) {
         session.onEvent = { [weak self] event in
             self?.chat.append(event)
+            self?.recorder.heard(event)
             self?.sessionSaid(event)
         }
+        // The voice chat keeps exactly what was sent of the mic and what was played of her.
+        session.setSentMicTap { [weak recorder] audio in
+            guard let pcm = Data(base64Encoded: audio) else { return }
+            DispatchQueue.main.async { recorder?.mic(pcm) }
+        }
+        session.audio.onPlayed = { [weak self] pcm, item in self?.recorder.played(pcm, item: item) }
         session.onUserTurn = { [weak self] in self?.userSaid($0) }
         session.onSpeech = { [weak self] started in self?.activation(started ? .speechStarted : .speechStopped) }
         session.audio.onSpeakingChanged = { [weak self] _ in self?.updateEscape() }
@@ -258,6 +278,7 @@ import VoiceEngine
             phone.screen = .settings
             return
         }
+        recorder.typed(text)
         session.sendTyped(text) // ends a pause or a disconnect: typing is an explicit request
         syncControls()
     }
@@ -277,7 +298,10 @@ import VoiceEngine
         case .pause(let on): if on { session.pause() } else { session.resume() }
         case .connect(let on):
             if on { session.reconnect() } else { session.disconnect() }
-            if !on { activation(.reset) } // closed by you: no conversation to finish
+            if !on {
+                activation(.reset) // closed by you: no conversation to finish
+                recorder.end()
+            }
         }
         syncControls()
     }
@@ -393,6 +417,7 @@ import VoiceEngine
         }
         guard let session else { return startSession() }
         if session.provider != provider {
+            recorder.provider = provider.rawValue
             session.switchProvider(to: provider, key: key, voice: voice)
             applyActivation() // the cooldown depends on whether the new provider can hold a reply
         }
