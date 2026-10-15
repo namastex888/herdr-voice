@@ -262,10 +262,14 @@ extension Proposal {
             case .addEntry:
                 let title = change.value?.object?["title"]?.string ?? change.path
                 let steps = (change.value?.object?["steps"]?.array ?? []).compactMap { $0.object?["action"]?.string }
-                let playbook = !(change.value?.object?["playbook"]?.string ?? "").isEmpty
+                let notes = (change.value?.object?["playbook"]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 var what = "learn a skill called \(title)"
                 if !steps.isEmpty { what += " that runs " + steps.joined(separator: ", ") }
-                if playbook { what += steps.isEmpty ? " with how-to notes" : ", with how-to notes" }
+                // The notes become the voice's instructions when the skill loads, so the human approves their text, not a label.
+                if !notes.isEmpty {
+                    let quoted = notes.count > 240 ? String(notes.prefix(240)) + "…" : notes
+                    what += (steps.isEmpty ? " with these how-to notes: " : ", with these how-to notes: ") + "\"\(quoted)\""
+                }
                 return what
             case .removeEntry:
                 return "forget the skill \(tree[change.path]?.config["title"]?.string ?? change.path)"
