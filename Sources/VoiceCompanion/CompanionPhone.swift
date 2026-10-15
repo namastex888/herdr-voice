@@ -11,15 +11,19 @@ extension CompanionController {
 
     // MARK: opening and closing
 
-    /// `activate`: the user asked (a click, the menu), so the phone takes focus.
-    func openPhone(_ screen: PhoneScreen? = nil, activate: Bool) {
-        openedByActivation = false
+    /// `activate`: the user asked (a click, the menu), so the phone takes focus. `reason` says why it's up, which
+    /// decides when it goes away by itself (`AutoMinimize`): what the user opened stays until they put it away or
+    /// move to another app; what she showed goes a few seconds after she's done with it.
+    func openPhone(_ screen: PhoneScreen? = nil, activate: Bool, reason: AutoMinimize.Reason = .user) {
         if let screen, phone.expanded { phone.go(screen) }
         phoneWindow?.expand(to: screen, activate: activate)
+        _ = minimizer.handle(.opened(reason, at: Date()))
+        syncPhoneReason()
     }
 
     func collapsePhone() {
-        openedByActivation = false
+        _ = minimizer.handle(.collapsed)
+        syncPhoneReason()
         phoneWindow?.collapse()
     }
 
@@ -27,43 +31,38 @@ extension CompanionController {
         if phone.expanded { collapsePhone() } else { openPhone(.home, activate: true) }
     }
 
-    /// Home, or the shade away, or from home back to the orb.
+    /// The gesture bar: the drawer up if it's down, otherwise back to the orb.
     func gestureBarTapped() {
         if phone.shadeOpen {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { phone.shadeOpen = false }
-        } else if phone.screen != .home {
-            phone.go(.home)
         } else {
             collapsePhone()
         }
     }
 
-    /// A conversation started by a tap, the wake word or her own report: the phone rises on its lock screen with the
-    /// assistant sheet, without taking focus from the app you're in.
+    /// A conversation started by a tap, the wake word or her own report: the orb lights up and listens; the phone
+    /// stays put unless she has something to show (`show_screen`) or a question for you.
     func showConversation() {
         conversationStarted = Date()
-        guard !phone.expanded else { return }
-        openedByActivation = true
-        phoneWindow?.expand(to: .lock, activate: false)
+        player.stop() // a note played back through the speakers would talk over you
     }
 
-    /// The conversation ended: back to the orb, unless you've moved on to using the phone.
+    /// The conversation ended: what she put up goes back into the orb, unless you've used it or she still waits
+    /// for your yes.
     func hideConversation() {
-        defer { openedByActivation = false }
-        guard openedByActivation, phone.screen == .lock, !phone.shadeOpen else { return }
-        phoneWindow?.collapse()
+        recorder.end()
+        if minimizer.handle(.conversationEnded) { minimize() }
     }
 
-    /// Esc while the phone has focus: the shade up, her speech or the conversation over, or the phone back into
-    /// the orb.
+    /// Esc while the phone has focus: the drawer up, or her speech or the conversation over and the phone back
+    /// into the orb.
     func escapeInPhone() {
         if phone.shadeOpen {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { phone.shadeOpen = false }
-        } else if !conversation.isIdle || chat.controls.speaking {
-            escape()
-        } else {
-            collapsePhone()
+            return
         }
+        if !conversation.isIdle || chat.controls.speaking { escape() }
+        collapsePhone()
     }
 
     /// The sheet's close button and its scrim.
@@ -71,13 +70,17 @@ extension CompanionController {
         if activationMode.opensOnRequest { activation(.dismiss) } else { stopSpeaking() }
     }
 
+    /// The assistant sheet rises over what you opened yourself; over what she showed (a result, her question) it
+    /// would hide the very thing she put up, and the orb already shows she listens.
     var showsAssistant: Bool {
-        !conversation.isIdle || (activationMode == .alwaysOn && chat.controls.speaking && phone.expanded)
+        guard phoneReason == .user, phone.screen != .messages else { return false }
+        return !conversation.isIdle || (activationMode == .alwaysOn && chat.controls.speaking && phone.expanded)
     }
 
     // MARK: what the screens list
 
-    var homeApps: [PhoneApp] {
+    /// The drawer's apps: each harness and learned skill, a slot to teach her one, then Chat, Skills and Settings.
+    var drawerApps: [PhoneApp] {
         var apps = harnesses.map { harness in
             PhoneApp(id: harness.id, kind: .harness, title: harness.title, symbol: Self.symbol(harness: harness.name),
                      dimmed: harness.status != .active)
@@ -85,16 +88,11 @@ extension CompanionController {
         apps += skills.map {
             PhoneApp(id: $0.id, kind: .skill, title: $0.skill.title, symbol: "sparkles", dimmed: $0.status != .active)
         }
-        let slots = max(1, 4 - skills.count)
-        apps += (0..<slots).map { PhoneApp(id: "teach.\($0)", kind: .teach, title: "Teach me", symbol: "plus") }
-        return Array(apps.prefix(12))
-    }
-
-    var dockApps: [PhoneApp] {
-        [PhoneApp(id: "messages", kind: .messages, title: "Messages", symbol: "bubble.left.and.text.bubble.right.fill"),
-         PhoneApp(id: "talk", kind: .talk, title: "Talk", symbol: "mic.fill"),
-         PhoneApp(id: "skills", kind: .skills, title: "Skills", symbol: "square.grid.2x2.fill"),
-         PhoneApp(id: "settings", kind: .settings, title: "Settings", symbol: "gearshape.fill")]
+        apps.append(PhoneApp(id: "teach", kind: .teach, title: "Teach me", symbol: "plus"))
+        let own = [PhoneApp(id: "messages", kind: .messages, title: "Chat", symbol: "waveform.and.person.filled"),
+                   PhoneApp(id: "skills", kind: .skills, title: "Skills", symbol: "square.grid.2x2.fill"),
+                   PhoneApp(id: "settings", kind: .settings, title: "Settings", symbol: "gearshape.fill")]
+        return Array(apps.prefix(12 - own.count)) + own
     }
 
     static func symbol(harness name: String) -> String {
@@ -250,12 +248,17 @@ extension CompanionController {
         syncControls()
         runDeferredPress(at: now)
         tickActivation(at: now)
+        tickMinimizer(at: now)
+        if !activationMode.opensOnRequest { recorder.tick(at: now) }
+        numbers.frame(at: now, connected: chat.controls.link == .connected,
+                      busy: chat.controls.speaking || (session?.replying ?? false))
         updateLive(at: now)
     }
 
     func updateLive(at now: Date = Date()) {
         guard let session else {
-            return live.update(look: .mood(.offline), mic: 0, voice: 0, thinking: false, cooldown: nil, followUp: nil)
+            return live.update(look: .mood(.offline), mic: 0, voice: 0, thinking: false, listening: false, cooldown: nil,
+                               followUp: nil)
         }
         let c = chat.controls, audio = session.audio
         // Between conversations nothing listens, so the orb rests rather than showing "listening".
@@ -267,7 +270,16 @@ extension CompanionController {
                     mic: c.listening && !session.standby ? audio.micLevel : 0,
                     voice: audio.isSpeaking ? audio.outLevel : 0,
                     thinking: session.status != .disconnected && session.thinking,
+                    listening: Self.lightsListening(conversation) && !c.muted && !c.paused,
                     cooldown: turns.cooldownProgress(at: now), followUp: turns.followUpRemaining(at: now))
+    }
+
+    /// The orb's listening glow: from the tap until the follow-up window closes, except while she answers.
+    static func lightsListening(_ phase: TurnTaking.Phase) -> Bool {
+        switch phase {
+        case .listening, .cooldown, .followUp: true
+        case .idle, .replying: false
+        }
     }
 
     /// On first run, a bubble beside the orb says how to talk.

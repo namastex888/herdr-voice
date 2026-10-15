@@ -22,11 +22,14 @@ import VoiceEngine
     defer { try? FileManager.default.removeItem(at: scratch) }
     // Its own gate, answering at once: the user's "no" below clears each question before the next is asked.
     let gate = ConfirmGate(minDelay: 0, wait: 0)
-    let controller = CompanionController(store: CompanionStore(directory: scratch), legacyDefaults: nil, gate: gate)
+    // Phoenix on a closed port: sends fail fast and are dropped, and nothing reaches the user's Phoenix.
+    let controller = CompanionController(store: CompanionStore(directory: scratch), legacyDefaults: nil, gate: gate,
+                                         home: VoxHome(root: scratch.appendingPathComponent("vox")),
+                                         phoenix: PhoenixConfig(endpoint: "http://127.0.0.1:9"))
     let registry = controller.registry
 
     let window = PhoneWindow(model: controller.phone, content: PhoneRoot(controller: controller, model: controller.phone,
-                                                                         live: controller.live, device: controller.device))
+                                                                         live: controller.live))
     controller.phoneWindow = window
     window.showOrb()
     let orbFrame = window.panel.frame
@@ -98,11 +101,15 @@ import VoiceEngine
     check("your edits apply, revert, and reset to a new hire", edited && reverted && registry.tree == .factory,
           controller.notice)
 
-    checkPhone(controller, window, check)
-
     let session = checkSessionControls(controller, check)
     checkActivation(controller, session, check)
     checkVoiceControl(controller, session, gate, check)
+    checkVoiceMode(controller, session, gate, check)
+    checkMetrics(controller, session, check)
+    checkPhoenix(controller, check)
+    checkVoiceChat(controller, check)
+    checkCockpit(controller, check)
+    checkPhone(controller, window, check)
 
     window.panel.orderOut(nil)
     print(failures == 0 ? "all checks passed" : "\(failures) check(s) failed")
@@ -255,7 +262,7 @@ import VoiceEngine
     check("the orb grows into the phone, anchored at its corner",
           controller.phone.expanded && controller.phone.morph == 1 && open.height >= PhoneWindow.phoneSize.height
               && window.panel.canBecomeKey, "\(Int(open.width))×\(Int(open.height))")
-    for name in ["lock", "home", "messages", "settings", "skills"] {
+    for name in ["lock", "home", "chat", "conversations", "settings", "skills"] {
         controller.phone.go(PhoneScreen.named[name] ?? .home)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
@@ -275,8 +282,8 @@ import VoiceEngine
     controller.phone.morph = 0
     controller.phone.expanded = false
     controller.phone.shadeOpen = false
-    check("every screen renders: lock, home, messages, settings, skills, an app, the shade, the orb and the morph",
-          blank.isEmpty, blank.isEmpty ? drawn.joined(separator: ", ") : "blank: " + blank.joined(separator: ", "))
+    check("every screen renders: " + PhoneRender.shots(appID: "harness.mac").map(\.name).joined(separator: ", "),
+          blank.isEmpty, blank.isEmpty ? "\(drawn.count) drawn" : "blank: " + blank.joined(separator: ", "))
 }
 
 /// Her own app by voice: the companion harness's tools change settings as your edits (by voice), drive the
@@ -321,6 +328,217 @@ import VoiceEngine
     check("switching the model or the shell on by voice still needs your spoken yes",
           model.hasPrefix("CONFIRMATION REQUIRED") && shell.hasPrefix("CONFIRMATION REQUIRED")
               && controller.settings.provider == nil && registry.tree["harness.shell"]?.disabled == true, model)
+}
+
+/// The day's numbers: one scripted OpenAI turn, fed through the session's own callbacks (speech, transcript, a tool,
+/// usage, her audio), lands in the aggregate with its latency, action, talk time and token cost, and in metrics.json.
+@MainActor private func checkMetrics(_ controller: CompanionController, _ session: Realtime,
+                                     _ check: (String, Bool, String) -> Void) {
+    let numbers = controller.numbers, provider = numbers.provider
+    numbers.flush()
+    let before = numbers.today
+    numbers.provider = .openai
+    session.onSpeech?(true)
+    session.onSpeech?(false)
+    session.onEvent?(.you("which agents are running"))
+    session.onEvent?(.toolCall(name: "list_agents", arguments: "{}"))
+    session.onEvent?(.toolResult(name: "list_agents", output: "[]"))
+    session.onUsage?(RealtimeUsage(inputAudioTokens: 1000, outputAudioTokens: 500))
+    session.audio.onPlayed?(syntheticSpeech(seconds: 0.5, seed: 6), "metrics-1")
+    session.onEvent?(.voice("None are running right now."))
+    numbers.frame(at: Date().addingTimeInterval(3), connected: false, busy: false)
+    numbers.frame(at: Date().addingTimeInterval(5), connected: false, busy: false)
+    numbers.flush()
+    numbers.drain()
+    let after = numbers.today, saved = MetricsLedger.load(controller.home.metrics).day(Date())
+    let cost = (after.cost["openai"] ?? 0) - (before.cost["openai"] ?? 0)
+    check("a turn lands in the day's numbers: turns, actions, latency, her talk time and its token cost, in metrics.json",
+          after.turns == before.turns + 1 && after.actions == before.actions + 1
+              && after.latencyCount == before.latencyCount + 1 && after.voxTalkSeconds > before.voxTalkSeconds
+              && abs(cost - (1000 * 32 + 500 * 64) / 1_000_000) < 1e-9 && saved == after,
+          String(format: "%d turns, $%.4f, %.0f ms", after.turns, after.totalCost, after.averageLatencyMs ?? -1))
+    numbers.provider = provider
+}
+
+/// The Phoenix export is failure-tolerant: the scripted turn above was queued as spans without the voice waiting,
+/// the send to a Phoenix that isn't there is dropped, and the detail charts fall back to the local numbers.
+@MainActor private func checkPhoenix(_ controller: CompanionController, _ check: (String, Bool, String) -> Void) {
+    let numbers = controller.numbers, phoenix = controller.phoenix
+    func flushed() -> PhoenixExporter.Outcome? {
+        let done = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var outcome: PhoenixExporter.Outcome?
+        phoenix.flush { result in
+            outcome = result
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + 8)
+        return outcome
+    }
+    _ = flushed() // what the checks above exported
+    let droppedBefore = phoenix.droppedSpans
+    // A connected stretch of a minute-billed model, then a turn on OpenAI.
+    numbers.provider = .grok
+    let base = Date().addingTimeInterval(10) // after the fake clock of the metrics check
+    for step in 0...4 { numbers.frame(at: base.addingTimeInterval(Double(step) * 0.4), connected: true, busy: false) }
+    numbers.frame(at: base.addingTimeInterval(2), connected: false, busy: false) // the link drops: one connection span
+    numbers.provider = .openai
+    numbers.speech(started: true, interrupting: false)
+    numbers.speech(started: false, interrupting: false)
+    numbers.replyAudio()
+    let started = Date()
+    numbers.flush() // the turn ends and goes to the exporter
+    let handedOver = Date().timeIntervalSince(started)
+    let outcome = flushed()
+    // The turn (turn and reply spans) and the connection span: three spans, sent once and dropped.
+    check("a turn and a connected stretch go to Phoenix without the voice waiting; a failed send is dropped, not retried",
+          handedOver < 0.05 && outcome?.ok == false && outcome?.spans == 3
+              && phoenix.droppedSpans == droppedBefore + 3 && phoenix.queuedSpans == 0,
+          String(format: "handed over in %.1f ms; %@; %d dropped", handedOver * 1000, outcome?.detail ?? "no send",
+                 phoenix.droppedSpans))
+
+    controller.history.refresh()
+    let deadline = Date().addingTimeInterval(6)
+    while controller.history.problem.isEmpty, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+    let label = controller.history.days(for: controller.numbers.snapshot.lastDays(14, endingAt: Date())).label
+    check("with Phoenix unreachable the detail charts read the local aggregate", label.hasPrefix("From this Mac"), label)
+}
+
+/// The voice chat: a spoken exchange becomes two voice notes with transcripts, saved as WAV files and a transcript
+/// under the (scratch) conversations folder; nothing muted or paused is kept; one conversation or all can be deleted.
+@MainActor private func checkVoiceChat(_ controller: CompanionController, _ check: (String, Bool, String) -> Void) {
+    let recorder = controller.recorder, store = recorder.store
+    recorder.end() // the typed turns of the checks above were a conversation of their own
+    recorder.deleteAll()
+    recorder.drain()
+    stageVoiceNotes(controller)
+    let saved = store.list()
+    let transcript = saved.first
+    let files = transcript.map { t in t.clips.compactMap { store.audioURL($0, in: t.id) } } ?? []
+    check("a spoken exchange is kept as voice notes: your audio, hers, both transcripts and a typed turn",
+          saved.count == 1 && transcript?.clips.map(\.side) == [.user, .vox, .user]
+              && transcript?.clips.map(\.text) == ["Open Safari and set the volume to 30",
+                                                   "Done: Safari's open and the volume is at 30.", "Thanks!"]
+              && files.count == 2 && files.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
+              && store.root.path.hasPrefix(FileManager.default.temporaryDirectory.path),
+          transcript.map { "\($0.id): \($0.clips.count) notes, \(files.count) audio files" } ?? "nothing saved")
+
+    controller.press(.mute(true))
+    recorder.mic(syntheticSpeech(seconds: 0.5, seed: 3))
+    controller.press(.mute(false))
+    controller.press(.pause(true))
+    recorder.mic(syntheticSpeech(seconds: 0.5, seed: 4))
+    controller.press(.pause(false))
+    check("muted or paused, the mic is never kept", recorder.clips.count == 3 && recorder.clips.last?.typed == true,
+          "\(recorder.clips.count) notes")
+
+    recorder.mic(syntheticSpeech(seconds: 0.4, seed: 5))
+    recorder.heard(.you("A second conversation"))
+    recorder.end()
+    recorder.drain()
+    let two = store.list().count
+    if let first = transcript?.id { recorder.delete(first) }
+    recorder.drain()
+    let one = store.list().count
+    recorder.deleteAll()
+    recorder.drain()
+    check("conversations are kept until you delete one, or all", two == 2 && one == 1 && store.list().isEmpty,
+          "\(two) → \(one) → \(store.list().count)")
+    stageVoiceNotes(controller) // for the screens below
+}
+
+/// The cockpit: welcome by name, the four headline widgets with their bases (Shipped not measured), the sections,
+/// the apps and quick toggles in the drawer, a widget's chart by voice, and the layout changed by voice at once.
+@MainActor private func checkCockpit(_ controller: CompanionController, _ check: (String, Bool, String) -> Void) {
+    let registry = controller.registry
+    stageCockpit(controller)
+    let layout = controller.dashboard, today = controller.numbers.snapshot.day(Date())
+    let readings = layout.widgets.map { WidgetReading.of($0, day: today, agents: controller.agents.counts) }
+    check("home is the cockpit: welcome by name, cost, talk time, agents working and shipped, each with its base",
+          !controller.userName.isEmpty && layout.widgets == [.cost, .talk, .agents, .shipped]
+              && layout.sections == [.running, .recent, .week, .trend]
+              && readings[2].value == "1" && readings[2].base == "of 3 agents in Herdr"
+              && !readings[3].measured && readings.allSatisfy { !$0.base.isEmpty },
+          "Welcome back, \(controller.userName): " + readings.map(\.value).joined(separator: " · "))
+
+    let drawer = controller.drawerApps.map(\.id)
+    check("the apps and quick toggles live in the drawer",
+          ["harness.mac", "harness.herdr", "messages", "skills", "settings"].allSatisfy(drawer.contains)
+              && controller.quickTiles.map(\.id).contains("mic"), drawer.joined(separator: ", "))
+
+    _ = registry.call("show_screen", arguments: json(["screen": "talk"]), userInitiated: true)
+    let detail = controller.phone.screen == .detail(.talk)
+    controller.collapsePhone()
+    let changes = registry.changes.count
+    let said = registry.call("set_dashboard", arguments: json(["top": "agent time", "hide": ["cost trend"]]),
+                             userInitiated: true).output
+    RunLoop.main.run(until: Date().addingTimeInterval(0.05)) // the settle reaches the controller
+    check("a widget's chart opens by voice, and “put agent time on top, hide the cost trend” applies at once",
+          detail && controller.dashboard.widgets.first == .agentTime && !controller.dashboard.sections.contains(.trend)
+              && registry.changes.count == changes + 1, said)
+    controller.setDashboard(.init(widgets: DashboardItem.defaultWidgets, sections: DashboardItem.defaultSections))
+}
+
+/// Voice mode: a tap lights the orb without the phone; the phone rises for what she shows or asks, and goes back
+/// into the orb by itself (a shown result a few seconds after she's quiet, the conversation's end, another app taking
+/// focus), never while her question waits for a yes; the gesture bar and Esc put it away too. Fake clock throughout.
+@MainActor private func checkVoiceMode(_ controller: CompanionController, _ session: Realtime, _ gate: ConfirmGate,
+                                       _ check: (String, Bool, String) -> Void) {
+    let registry = controller.registry
+    let t = Date()
+    func at(_ seconds: TimeInterval) -> Date { t.addingTimeInterval(seconds) }
+    func show(_ screen: String) { _ = registry.call("show_screen", arguments: json(["screen": screen]), userInitiated: true) }
+    controller.collapsePhone()
+    controller.activation(.reset)
+
+    controller.activation(.tap, at: at(0))
+    controller.updateLive(at: at(0))
+    check("a tap lights the orb's listening glow and leaves the phone down",
+          !controller.phone.expanded && controller.live.frame.listening && !controller.conversation.isIdle,
+          "\(controller.conversation)")
+
+    show("home")
+    let shown = controller.phone.expanded && controller.phoneReason == .shown
+    controller.tickMinimizer(at: at(1), busy: true) // she's still talking about it
+    controller.tickMinimizer(at: at(8), busy: true)
+    controller.tickMinimizer(at: at(9), busy: false)
+    controller.tickMinimizer(at: at(12.5), busy: false)
+    let lingered = controller.phone.expanded
+    controller.tickMinimizer(at: at(13.2), busy: false)
+    check("what she shows rises, then goes back into the orb about 4 s after she's quiet",
+          shown && lingered && !controller.phone.expanded && controller.phoneReason == nil, "")
+
+    show("home")
+    controller.phoneTouched()
+    controller.tickMinimizer(at: at(30), busy: false)
+    let kept = controller.phone.expanded
+    controller.otherAppFocused()
+    check("a result you touched stays; another app taking focus puts it away", kept && !controller.phone.expanded, "")
+
+    show("home")
+    controller.activation(.dismiss, at: at(31))
+    check("the conversation's end puts away what she showed", !controller.phone.expanded && controller.conversation.isIdle,
+          "\(controller.conversation)")
+
+    let ask = registry.call("set_model", arguments: json(["provider": "openai"]), userInitiated: true).output
+    controller.sessionSaid(.toolResult(name: "set_model", output: ask))
+    let asked = controller.phone.expanded && controller.phone.screen == .messages && controller.phoneReason == .question
+    controller.tickMinimizer(at: at(40), busy: false)
+    controller.otherAppFocused()
+    controller.hideConversation()
+    let held = controller.phone.expanded
+    gate.heard("no")
+    controller.tickMinimizer(at: at(60), busy: false)
+    controller.tickMinimizer(at: at(64.5), busy: false)
+    check("her question opens the conversation and holds the phone up until it's answered",
+          asked && held && !controller.phone.expanded, ask.prefix(40).description)
+
+    controller.openPhone(.home, activate: false)
+    controller.gestureBarTapped()
+    let barred = !controller.phone.expanded
+    controller.openPhone(.home, activate: false)
+    controller.escapeInPhone()
+    check("the gesture bar and Esc put the phone back into the orb", barred && !controller.phone.expanded, "")
+    controller.activation(.reset)
 }
 
 private func json(_ object: [String: Any]) -> String {

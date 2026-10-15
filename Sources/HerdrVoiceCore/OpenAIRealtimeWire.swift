@@ -56,6 +56,11 @@ public final class OpenAIRealtimeWire: Wire, Sendable {
     }
 
     public func decode(_ text: String) -> [ServerEvent] {
-        [ServerEvent.decode(text)]
+        let event = ServerEvent.decode(text)
+        // The usage that prices the turn rides on response.done; xAI bills by the minute and its usage is ignored.
+        if event == .responseDone, provider == .openai, let usage = RealtimeUsage.fromResponseDone(text) {
+            return [.usage(usage), event]
+        }
+        return [event]
     }
 }

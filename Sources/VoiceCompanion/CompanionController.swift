@@ -48,10 +48,9 @@ import VoiceEngine
     let keys: CompanionKeys
     let chat = ChatModel()
     let registry: SkillRegistry
-    /// The phone's screen, shade and morph; the live levels its orb and light bar draw; the Mac's battery and network.
+    /// The phone's screen, drawer and morph; the live levels its orb and light bar draw.
     let phone = PhoneModel()
     let live = LiveLevels()
-    let device = DeviceStatus()
     @Published private(set) var tree: ConfigTree
     @Published private(set) var harnesses: [HarnessInfo] = []
     @Published private(set) var skills: [SkillInfo] = []
@@ -91,15 +90,41 @@ import VoiceEngine
     @Published var handsFree = false
     /// The activation key can't be watched (no Input Monitoring) or the wake word can't listen: what she does instead.
     @Published var activationNote = ""
-    /// The conversation opened the phone, so its end puts it away again.
-    var openedByActivation = false
+    /// When the phone goes back into the orb by itself (see VoiceMode.swift), and why it's up, for the views.
+    var minimizer = AutoMinimize()
+    @Published var phoneReason: AutoMinimize.Reason?
+    /// Watches for another app taking focus and for clicks in the phone.
+    var voiceModeObservers: [Any] = []
+    /// Where her questions wait for the user's own yes: while one waits, the phone stays up.
+    let gate: ConfirmGate
+    /// `~/.vox`: the conversations and the day's numbers.
+    let home: VoxHome
+    /// The voice chat: both sides' voice notes, kept on disk until deleted.
+    let recorder: ConversationRecorder
+    let player = VoiceNotePlayer()
+    /// The day's numbers (`~/.vox/metrics.json`) the cockpit reads.
+    let numbers: MetricsRecorder
+    /// The cockpit's "Running now": Herdr's agents, through the Herdr harness.
+    let agents: AgentsWatcher
+    /// Where the detail charts' days come from.
+    let history = CockpitHistory()
+    /// Spans to the user's Phoenix: each turn, tool call, delegation and connected stretch.
+    let phoenix: PhoenixExporter
+    /// The self-test's Phoenix, instead of the one in her configuration.
+    private let phoenixOverride: PhoenixConfig?
 
     /// `store` is where `config.json` lives; the first time it is built from 0.1.0's settings (`legacyDefaults`) and
     /// skills folder. nil keeps the configuration in memory. `gate` holds proposals until the human's own yes.
     init(keys: CompanionKeys = CompanionKeys(),
          store: CompanionStore? = CompanionStore(directory: CompanionStore.defaultDirectory),
-         legacyDefaults: UserDefaults? = .standard, gate: ConfirmGate = .shared) {
+         legacyDefaults: UserDefaults? = .standard, gate: ConfirmGate = .shared, home: VoxHome = .user,
+         phoenix override: PhoenixConfig? = nil) {
         self.keys = keys
+        phoenixOverride = override
+        self.gate = gate
+        self.home = home
+        recorder = ConversationRecorder(store: ConversationStore(root: home.conversations))
+        numbers = MetricsRecorder(url: home.metrics, provider: .grok)
         configDirectory = store?.directory
         // Her own app's controls (the companion harness) run here, through the bridge, on the same gate the
         // session's heard words go to.
@@ -107,11 +132,44 @@ import VoiceEngine
         registry = SkillRegistry(store: store, factory: .companion(bridge, gate: gate), gate: gate,
                                  legacyDefaults: legacyDefaults)
         appBridge = bridge
+        let registry = registry
+        agents = AgentsWatcher(list: { registry.call("list_agents", arguments: "{}", userInitiated: true).output },
+                               focus: { target in
+                                   let args = (try? JSONSerialization.data(withJSONObject: ["target": target]))
+                                       .map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+                                   return registry.call("focus", arguments: args, userInitiated: true).output
+                               })
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        phoenix = PhoenixExporter(config: override ?? PhoenixConfig(registry.tree["settings"]?.config["phoenix"]),
+                                  apiKey: keys.phoenixKey, version: version)
         tree = registry.tree
         reload()
         provider = chosenProvider()
         bridge.attach(self)
         chat.provider = provider
+        recorder.provider = provider.rawValue
+        numbers.provider = provider
+        recorder.onTalk = { [weak self] side, seconds in self?.numbers.talk(side, seconds: seconds) }
+        recorder.onConversation = { [weak self] in self?.numbers.conversationStarted() }
+        numbers.onTurn = { [weak self] turn in
+            guard let self else { return }
+            self.phoenix.export(TurnSpans.spans(turn, session: self.recorder.conversationID))
+        }
+        numbers.onConnection = { [weak self] stretch in self?.phoenix.export([TurnSpans.connection(stretch)]) }
+        history.config = { [weak self] in self?.phoenixConfig ?? PhoenixConfig() }
+        let keys = keys
+        history.apiKey = { keys.phoenixKey }
+        agents.onAgentTime = { [weak self] seconds in self?.numbers.agentTime(seconds) }
+        agents.onWorking = { [weak self] count in self?.numbers.agentsWorking(count) }
+        agents.watched = { [weak self] in
+            guard let self else { return false }
+            return self.phone.expanded && self.phone.screen == .home
+        }
+        recorder.micAllowed = { [weak self] in
+            guard let session = self?.session else { return true }
+            return !session.muted && !session.paused
+        }
+        recorder.refreshSaved()
         refreshRouter()
         registry.onChange { [weak self] emission in
             DispatchQueue.main.async { self?.registryChanged(emission) }
@@ -130,6 +188,39 @@ import VoiceEngine
     }
 
     var facts: [String] { (tree["memory"]?.config["facts"]?.array ?? []).compactMap(\.string) }
+
+    /// What she calls the user: `identity.userName`, else the first name of this Mac's account.
+    var userName: String {
+        let set = identity("userName").trimmingCharacters(in: .whitespaces)
+        if !set.isEmpty { return set }
+        return NSFullUserName().split(separator: " ").first.map(String.init) ?? NSUserName()
+    }
+
+    /// Where her spans go (`settings.phoenix`).
+    var phoenixConfig: PhoenixConfig { phoenixOverride ?? PhoenixConfig(tree["settings"]?.config["phoenix"]) }
+
+    /// Changes where her spans go, as the user's own edit.
+    func setPhoenix(_ change: (inout PhoenixConfig) -> Void) {
+        var next = phoenixConfig
+        change(&next)
+        guard next != phoenixConfig else { return }
+        edit { try registry.setField("settings", "phoenix", next.json) }
+    }
+
+    func savePhoenixKey(_ raw: String) {
+        notice = keys.savePhoenixKey(raw) ? "Saved the Phoenix key." : "That doesn't look like a key."
+        phoenix.configure(phoenixConfig, apiKey: keys.phoenixKey)
+    }
+
+    /// What the cockpit shows (`settings.dashboard`).
+    var dashboard: DashboardLayout { DashboardLayout(tree["settings"]?.config["dashboard"]) }
+
+    /// Shows or hides one cockpit item, as the user's own edit.
+    func setDashboard(_ change: DashboardLayout.Edit) {
+        let next = dashboard.applying(change)
+        guard next != dashboard else { return }
+        edit { try registry.setField("settings", "dashboard", next.json) }
+    }
 
     /// The voice named in the tree, else the provider's own (voice names differ per provider).
     var voice: String { settings.voice ?? provider.defaultVoice }
@@ -161,10 +252,11 @@ import VoiceEngine
 
     func start() {
         phone.theme = PhoneTheme(seed: accent)
-        let window = PhoneWindow(model: phone, content: PhoneRoot(controller: self, model: phone, live: live, device: device))
+        let window = PhoneWindow(model: phone, content: PhoneRoot(controller: self, model: phone, live: live))
         phoneWindow = window
         window.onFocusChange = { [weak self] in self?.updateEscape() }
-        device.start()
+        agents.start()
+        watchFocusAndTouches()
         installStatusItem()
         window.showOrb()
         startFrames()
@@ -180,6 +272,7 @@ import VoiceEngine
     private func startSession() {
         provider = chosenProvider()
         chat.provider = provider
+        numbers.provider = provider
         guard let key = keys.key(for: provider) else {
             chat.note("Add a \(provider.menuTitle) API key in Settings to start talking.")
             phone.screen = .settings
@@ -206,9 +299,28 @@ import VoiceEngine
     /// Wires a session to the chat, routing and Esc, and makes it the one the controls drive. Before `start()`, so
     /// its first notes reach the chat; the self-test attaches one it never starts.
     func attach(_ session: Realtime) {
-        session.onEvent = { [weak self] in self?.chat.append($0) }
+        session.onEvent = { [weak self] event in
+            self?.chat.append(event)
+            self?.recorder.heard(event)
+            self?.numbers.heard(event)
+            self?.sessionSaid(event)
+        }
+        session.onUsage = { [weak self] usage in self?.numbers.usage(usage) }
+        // The voice chat keeps exactly what was sent of the mic and what was played of her.
+        session.setSentMicTap { [weak recorder] audio in
+            guard let pcm = Data(base64Encoded: audio) else { return }
+            DispatchQueue.main.async { recorder?.mic(pcm) }
+        }
+        session.audio.onPlayed = { [weak self] pcm, item in
+            self?.recorder.played(pcm, item: item)
+            self?.numbers.replyAudio()
+        }
         session.onUserTurn = { [weak self] in self?.userSaid($0) }
-        session.onSpeech = { [weak self] started in self?.activation(started ? .speechStarted : .speechStopped) }
+        session.onSpeech = { [weak self] started in
+            guard let self else { return }
+            self.numbers.speech(started: started, interrupting: started && self.chat.controls.speaking)
+            self.activation(started ? .speechStarted : .speechStopped)
+        }
         session.audio.onSpeakingChanged = { [weak self] _ in self?.updateEscape() }
         self.session = session
         syncControls()
@@ -234,6 +346,12 @@ import VoiceEngine
     }
 
     func quit() {
+        // The conversation's last notes are kept like the rest, and today's numbers written, before she goes.
+        recorder.end()
+        recorder.drain()
+        numbers.flush()
+        numbers.drain()
+        phoenix.flush()
         session?.shutdown()
         // A moment for the WebSocket close frame to go out.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
@@ -248,6 +366,8 @@ import VoiceEngine
             phone.screen = .settings
             return
         }
+        recorder.typed(text)
+        numbers.typed(text)
         session.sendTyped(text) // ends a pause or a disconnect: typing is an explicit request
         syncControls()
     }
@@ -267,7 +387,10 @@ import VoiceEngine
         case .pause(let on): if on { session.pause() } else { session.resume() }
         case .connect(let on):
             if on { session.reconnect() } else { session.disconnect() }
-            if !on { activation(.reset) } // closed by you: no conversation to finish
+            if !on {
+                activation(.reset) // closed by you: no conversation to finish
+                recorder.end()
+            }
         }
         syncControls()
     }
@@ -283,6 +406,7 @@ import VoiceEngine
     }
 
     func stopSpeaking() {
+        if chat.controls.speaking { numbers.interrupted() }
         session?.stopSpeech(reason: "you pressed Stop")
         syncControls()
     }
@@ -329,9 +453,11 @@ import VoiceEngine
     private func route(_ text: String) {
         recentTurns = Array((recentTurns + [text]).suffix(Self.routingContext))
         let router = router, options = registry.routeOptions, recent = Array(recentTurns.dropLast())
+        let asked = Date()
         Task { @MainActor [weak self] in
             guard let decision = await router.route(text, recent: recent, options: options), let self else { return }
             self.chat.lastRoute = decision
+            self.numbers.route(decision, milliseconds: Date().timeIntervalSince(asked) * 1000)
             if decision.skill != RouteDecision.chat { self.registry.activate(decision.skill) }
         }
     }
@@ -360,6 +486,10 @@ import VoiceEngine
         reload()
         let after = settings
         followAccent()
+        if before.phoenix != after.phoenix {
+            phoenix.configure(phoenixConfig, apiKey: keys.phoenixKey)
+            history.forget()
+        }
         if after.routeWithJev != before.routeWithJev || after.jevModel != before.jevModel { refreshRouter() }
         if after.activation != before.activation || after.activationKey != before.activationKey
             || after.followUpSeconds != before.followUpSeconds || after.wakePhrase != before.wakePhrase {
@@ -377,6 +507,7 @@ import VoiceEngine
     private func followProvider() {
         provider = chosenProvider()
         chat.provider = provider
+        numbers.provider = provider
         guard let key = keys.key(for: provider) else {
             chat.note("\(provider.menuTitle) has no API key yet; add one in Settings.")
             notice = "Add a \(provider.menuTitle) key below to talk with it."
@@ -385,6 +516,7 @@ import VoiceEngine
         }
         guard let session else { return startSession() }
         if session.provider != provider {
+            recorder.provider = provider.rawValue
             session.switchProvider(to: provider, key: key, voice: voice)
             applyActivation() // the cooldown depends on whether the new provider can hold a reply
         }

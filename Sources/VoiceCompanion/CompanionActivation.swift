@@ -111,6 +111,7 @@ extension CompanionController {
             session?.listen()
             showConversation()
         case .submit:
+            numbers.submitted()
             session?.submitTurn()
         case .bargeIn:
             session?.stopSpeech(reason: "you tapped")

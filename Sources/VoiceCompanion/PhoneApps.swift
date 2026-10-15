@@ -235,102 +235,9 @@ struct NoticeBanner: View {
     }
 }
 
-// MARK: Messages
+// MARK: Messages (the voice chat's other lines)
 
-/// The conversation as Android chat cards, spoken or typed, with what she ran and asked; type below.
-struct MessagesScreen: View {
-    @ObservedObject var controller: CompanionController
-    @ObservedObject var chat: ChatModel
-    @ObservedObject var model: PhoneModel
-    @State private var draft = ""
-    @FocusState private var typing: Bool
-    @Environment(\.phoneTheme) private var theme
-    @Environment(\.phoneSnapshot) private var snapshot
-
-    var body: some View {
-        VStack(spacing: 0) {
-            TopBar(title: controller.name, back: { model.go(.home) }) {
-                Text(chat.controls.state).font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(theme.onSurfaceVariant)
-            }
-            skillStrip
-            ScrollViewReader { scroller in
-                PhoneScroll {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        if chat.conversation.isEmpty {
-                            Text("Talk any time, or type below. \(controller.name) is new here: give a first task (“open "
-                                 + "Safari”, “set the volume to 30”) or teach one (“when I say start my day, open Mail and "
-                                 + "Calendar”). Nothing about her changes without your yes.")
-                                .font(.system(size: 13)).foregroundStyle(theme.onSurfaceVariant)
-                                .padding(16)
-                                .background(RoundedRectangle(cornerRadius: 20).fill(theme.surfaceContainer))
-                                .padding(.top, 12)
-                        }
-                        ForEach(snapshot ? Array(chat.conversation.suffix(8)) : chat.conversation) {
-                            MessageCard(line: $0).id($0.id)
-                        }
-                    }
-                    .padding(.horizontal, 12).padding(.bottom, 8)
-                }
-                .onChange(of: chat.lines.last?.id) { _, last in
-                    if let last { withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(last, anchor: .bottom) } }
-                }
-            }
-            inputBar.padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 30)
-        }
-        .background(theme.surface)
-    }
-
-    private var skillStrip: some View {
-        HStack(spacing: 6) {
-            ForEach(chat.activeSkills.prefix(3), id: \.self) { id in
-                Text(controller.title(ofSkill: id)).font(.system(size: 11, weight: .medium)).lineLimit(1)
-                    .padding(.horizontal, 10).padding(.vertical, 4)
-                    .background(Capsule().fill(id == chat.activeSkills.first ? theme.secondaryContainer : theme.surfaceContainerHigh))
-                    .foregroundStyle(theme.onSecondaryContainer)
-            }
-            Spacer(minLength: 0)
-            if let route = chat.lastRoute {
-                Text(route.skill == RouteDecision.chat ? "just talking"
-                     : "\(route.source == .jev ? "Jev" : "words") \(Int((route.confidence * 100).rounded()))%")
-                    .font(.system(size: 10)).foregroundStyle(theme.onSurfaceVariant)
-            }
-        }
-        .padding(.horizontal, 14).padding(.bottom, 4)
-    }
-
-    private var inputBar: some View {
-        HStack(spacing: 8) {
-            Group {
-                if snapshot {
-                    Text("Message \(controller.name)").opacity(0.55).frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    TextField("Message \(controller.name)", text: $draft, axis: .vertical)
-                        .textFieldStyle(.plain).lineLimit(1...4).focused($typing).onSubmit(send)
-                }
-            }
-            .font(.system(size: 14)).foregroundStyle(theme.onSurface)
-            .padding(.horizontal, 16).padding(.vertical, 11)
-            .background(Capsule().fill(theme.surfaceContainerHighest))
-            let empty = draft.trimmingCharacters(in: .whitespaces).isEmpty
-            Button(action: empty ? { controller.talkTapped() } : send) {
-                Image(systemName: empty ? "mic.fill" : "arrow.up").font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(theme.onPrimary)
-                    .frame(width: 42, height: 42).background(Circle().fill(theme.primary))
-            }
-            .buttonStyle(.plain).help(empty ? "Talk" : "Send")
-            .keyboardShortcut(.return, modifiers: .command)
-        }
-    }
-
-    private func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        draft = ""
-        controller.send(text)
-    }
-}
-
+/// A line of the conversation that isn't a voice note: what she ran, its result, her question, a change, a note.
 struct MessageCard: View {
     let line: ChatModel.Line
     @Environment(\.phoneTheme) private var theme
@@ -410,6 +317,9 @@ struct SettingsScreen: View {
                     memory
                     voice
                     keysCard
+                    cockpit
+                    prices
+                    phoenixCard
                     routing
                     look
                     reset
@@ -488,6 +398,9 @@ struct SettingsScreen: View {
     private var identity: some View {
         Card(title: "Identity", footer: "She can propose changes to these too; hers apply only after your yes.") {
             PhoneField("Name", value: controller.identity("name")) { controller.setIdentity("name", $0) }
+            PhoneField("What she calls you", value: controller.identity("userName"), placeholder: controller.userName) {
+                controller.setIdentity("userName", $0)
+            }
             PhoneField("Role", value: controller.identity("role")) { controller.setIdentity("role", $0) }
             PhoneField("Personality", value: controller.identity("personality"), lines: 3) {
                 controller.setIdentity("personality", $0)
@@ -534,6 +447,69 @@ struct SettingsScreen: View {
                 PhoneField("\(provider.menuTitle) key\(keys.hasKey(provider) ? " (saved)" : "")", value: "",
                            placeholder: keys.hasKey(provider) ? "Saved; paste to replace" : "Paste a key", secure: true) {
                     controller.saveKey($0, for: provider)
+                }
+            }
+        }
+    }
+
+    /// Which widgets and sections the cockpit shows; she changes it by voice too ("put agent time on top").
+    private var cockpit: some View {
+        let layout = controller.dashboard
+        return Card(title: "Cockpit", footer: "Or say it: “put agent time on top”, “hide the cost trend”.") {
+            ForEach(DashboardItem.allCases) { item in
+                let shown = layout.widgets.contains(item) || layout.sections.contains(item)
+                SwitchRow(title: item.title, detail: item.isWidget ? nil : "Section", isOn: shown) { on in
+                    controller.setDashboard(on ? .init(show: [item]) : .init(hide: [item]))
+                }
+            }
+        }
+    }
+
+    /// Where her traces go: the user's Phoenix, its project and key.
+    private var phoenixCard: some View {
+        let config = controller.phoenixConfig
+        let status: String = {
+            guard config.enabled else { return "Off: nothing leaves this Mac." }
+            guard config.tracesURL != nil else { return "The address isn't a URL." }
+            guard let last = controller.phoenix.lastOutcome else { return "Nothing sent yet." }
+            let time = last.time.formatted(date: .omitted, time: .shortened)
+            return last.ok ? "Sent \(last.spans) spans at \(time)." : "Last send at \(time) failed (\(last.detail)); dropped."
+        }()
+        return Card(title: "Phoenix", footer: "Each turn, tool call, delegation and connected stretch goes to Phoenix as "
+                    + "OpenTelemetry spans: timings, routing, counts and cost, never your words. A send that fails is "
+                    + "dropped; the voice never waits for it.") {
+            SwitchRow(title: "Send traces to Phoenix", detail: status, isOn: config.enabled) { on in
+                controller.setPhoenix { $0.enabled = on }
+            }
+            PhoneField("Address", value: config.endpoint) { text in controller.setPhoenix { $0.endpoint = text } }
+            PhoneField("Project", value: config.project) { text in controller.setPhoenix { $0.project = text } }
+            PhoneField("API key (PHOENIX_API_KEY)\(keys.hasPhoenixKey ? " (saved)" : "")", value: "",
+                       placeholder: keys.hasPhoenixKey ? "Saved; paste to replace" : "Only if your Phoenix asks for one",
+                       secure: true) { controller.savePhoenixKey($0) }
+        }
+    }
+
+    /// What each voice model costs, as the cockpit prices it (a versioned table).
+    private var prices: some View {
+        let table = PriceTable.current
+        return Card(title: "Prices", footer: "Price table \(table.version). OpenAI is priced from each response's token "
+                    + "usage, Grok by connected minutes; Gemini is estimated by the minute.") {
+            ForEach(table.rows, id: \.provider) { row in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text(row.provider.menuTitle).font(.system(size: 13, weight: .semibold))
+                        Text(row.model).font(.system(size: 11)).foregroundStyle(theme.onSurfaceVariant)
+                        Spacer()
+                        if row.estimated {
+                            Text("estimated").font(.system(size: 10, weight: .medium))
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Capsule().fill(theme.tertiaryContainer))
+                                .foregroundStyle(theme.onTertiaryContainer)
+                        }
+                    }
+                    .foregroundStyle(theme.onSurface)
+                    Text(row.summary).font(.system(size: 11)).foregroundStyle(theme.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -684,7 +660,7 @@ private struct HarnessRow: View {
         VStack(alignment: .leading, spacing: 4) {
             SwitchRow(title: harness.title,
                       detail: (harness.status == .active ? (loaded ? "On · loaded" : "On") : harness.statusText)
-                          + " · \(harness.actions.count) actions",
+                          + " · \(harness.actions.count) action\(harness.actions.count == 1 ? "" : "s")",
                       isOn: harness.on) { controller.setHarness(harness.id, on: $0) }
             Button("See its controls") { model.go(.app(harness.id)) }
                 .buttonStyle(.plain).font(.system(size: 11, weight: .medium)).foregroundStyle(theme.primary)

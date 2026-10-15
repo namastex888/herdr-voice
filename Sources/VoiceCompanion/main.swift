@@ -13,6 +13,10 @@ app.setActivationPolicy(.accessory)
 if CommandLine.arguments.contains("--self-test") {
     exit(runSelfTest())
 }
+if let flag = CommandLine.arguments.firstIndex(of: "--phoenix-check") {
+    let next = CommandLine.arguments.indices.contains(flag + 1) ? CommandLine.arguments[flag + 1] : nil
+    exit(runPhoenixCheck(endpoint: next.flatMap { $0.hasPrefix("-") ? nil : $0 }))
+}
 if let flag = CommandLine.arguments.firstIndex(of: "--dump-tools"), CommandLine.arguments.indices.contains(flag + 1) {
     exit(dumpTools(to: CommandLine.arguments[flag + 1]))
 }

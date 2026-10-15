@@ -13,13 +13,12 @@ struct PhoneRoot: View {
     @ObservedObject var controller: CompanionController
     @ObservedObject var model: PhoneModel
     let live: LiveLevels
-    let device: DeviceStatus
 
     var body: some View {
         MorphShell(morph: model.morph) {
             OrbButton(controller: controller, live: live)
         } phone: {
-            PhoneBody(controller: controller, chat: controller.chat, model: model, live: live, device: device)
+            PhoneBody(controller: controller, chat: controller.chat, model: model, live: live)
         }
         .padding(PhoneWindow.pad)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -68,7 +67,7 @@ struct MorphShell<Orb: View, Phone: View>: View, Animatable {
             }
             if p < 0.6 {
                 orb
-                    .scaleEffect(1 + p * 0.8)
+                    .scaleEffect(1 + p * 0.5)
                     .opacity(1 - p / 0.6)
                     .frame(width: d, height: d)
                     .allowsHitTesting(p < 0.05)
@@ -129,6 +128,13 @@ struct OrbView: View {
                          with: .radialGradient(Gradient(colors: [colors[0].opacity(dim ? 0.22 : 0.45 + energy * 0.3),
                                                                  colors[1].opacity(0)]),
                                                center: c, startRadius: 0, endRadius: glowR))
+            if f.listening {
+                // Listening: a bright halo in the accent, unmistakable from across the screen.
+                let haloR = diameter * min(0.8, 0.72 + f.mic * 0.16) // inside the canvas and the window, even mid-morph
+                context.fill(Path(ellipseIn: CGRect(x: c.x - haloR, y: c.y - haloR, width: haloR * 2, height: haloR * 2)),
+                             with: .radialGradient(Gradient(colors: [theme.primary.opacity(0.7), theme.primary.opacity(0)]),
+                                                   center: c, startRadius: r * 0.9, endRadius: haloR))
+            }
             let sphere = CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)
             context.drawLayer { layer in
                 layer.clip(to: Path(ellipseIn: sphere))
@@ -158,6 +164,12 @@ struct OrbView: View {
                 layer.fill(Path(ellipseIn: spot), with: .radialGradient(
                     Gradient(colors: [.white.opacity(0.32), .white.opacity(0)]),
                     center: CGPoint(x: spot.midX, y: spot.midY), startRadius: 0, endRadius: spot.width / 2))
+            }
+            if f.listening {
+                let pulse = 0.5 + 0.5 * sin(f.time * 2.6)
+                let ringR = r * (1.14 + f.mic * 0.16)
+                context.stroke(Path(ellipseIn: CGRect(x: c.x - ringR, y: c.y - ringR, width: ringR * 2, height: ringR * 2)),
+                               with: .color(theme.primary.blend(.white, 0.35).opacity(0.6 + 0.35 * pulse)), lineWidth: 2.5)
             }
             if f.thinking {
                 // Three dots at the lower right, like the plugin's thought bubble.
@@ -190,7 +202,6 @@ struct PhoneBody: View {
     @ObservedObject var chat: ChatModel
     @ObservedObject var model: PhoneModel
     let live: LiveLevels
-    let device: DeviceStatus
     @Environment(\.phoneTheme) private var theme
 
     var body: some View {
@@ -205,9 +216,10 @@ struct PhoneBody: View {
                 AssistantSheet(controller: controller, chat: chat, live: live)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            StatusBar(device: device, onPull: { withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { model.shadeOpen = true } })
+            StatusBar(controller: controller, chat: chat, numbers: controller.numbers, agents: controller.agents,
+                      onPull: { withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { model.shadeOpen = true } })
             if model.shadeOpen {
-                Shade(controller: controller, chat: chat, model: model, device: device)
+                Shade(controller: controller, chat: chat, model: model)
                     .transition(.move(edge: .top))
                     .zIndex(2)
             }
@@ -215,6 +227,9 @@ struct PhoneBody: View {
                 .frame(maxHeight: .infinity, alignment: .bottom)
                 .zIndex(3)
         }
+        // A fixed screen: nothing inside can push it past the bezel.
+        .frame(width: PhoneWindow.phoneSize.width - PhoneWindow.bezel * 2,
+               height: PhoneWindow.phoneSize.height - PhoneWindow.bezel * 2)
         .clipShape(screen)
         .padding(PhoneWindow.bezel)
         .background(
@@ -230,8 +245,16 @@ struct PhoneBody: View {
     @ViewBuilder private var current: some View {
         switch model.screen {
         case .lock: LockScreen(controller: controller, chat: chat, model: model)
-        case .home: HomeScreen(controller: controller, model: model)
-        case .messages: MessagesScreen(controller: controller, chat: chat, model: model)
+        case .home: HomeScreen(controller: controller, model: model, numbers: controller.numbers,
+                               agents: controller.agents, recorder: controller.recorder)
+        case .detail(let item): CockpitDetailScreen(controller: controller, numbers: controller.numbers,
+                                                    agents: controller.agents, history: controller.history,
+                                                    model: model, item: item)
+        case .messages: VoiceChatScreen(controller: controller, chat: chat, recorder: controller.recorder,
+                                        player: controller.player, model: model)
+        case .conversations: ConversationsScreen(controller: controller, recorder: controller.recorder, model: model)
+        case .conversation(let id): SavedConversationScreen(recorder: controller.recorder, player: controller.player,
+                                                            model: model, id: id)
         case .settings: SettingsScreen(controller: controller, keys: controller.keys, model: model)
         case .skills: SkillsScreen(controller: controller, chat: chat, model: model)
         case .app(let id): AppScreen(controller: controller, model: model, id: id)
@@ -239,28 +262,40 @@ struct PhoneBody: View {
     }
 }
 
-/// Time, the punch-hole camera, Wi-Fi and battery: the Mac's own. Click or pull it down for the shade.
+/// Time, the punch-hole camera, and what she orchestrates instead of a battery and Wi-Fi: the session's connection,
+/// the Herdr agents working, and today's cost. Click or pull it down for the drawer.
 struct StatusBar: View {
     static let height: CGFloat = 34
-    @ObservedObject var device: DeviceStatus
+    @ObservedObject var controller: CompanionController
+    @ObservedObject var chat: ChatModel
+    @ObservedObject var numbers: MetricsRecorder
+    @ObservedObject var agents: AgentsWatcher
     let onPull: () -> Void
     @Environment(\.phoneTheme) private var theme
 
     var body: some View {
         ZStack {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 TimelineView(.everyMinute) { context in
                     Text(context.date, format: .dateTime.hour().minute())
                         .font(.system(size: 13, weight: .semibold)).monospacedDigit()
                 }
                 Spacer()
-                Image(systemName: networkSymbol).font(.system(size: 11, weight: .semibold))
-                if let battery = device.battery {
-                    Text("\(battery)%").font(.system(size: 11, weight: .semibold)).monospacedDigit()
-                    Image(systemName: batterySymbol(battery)).font(.system(size: 13))
-                } else {
-                    Image(systemName: "powerplug.fill").font(.system(size: 10))
+                HStack(spacing: 3) {
+                    Circle().fill(linkColor).frame(width: 6, height: 6)
+                    Text(linkWord).font(.system(size: 10, weight: .semibold))
                 }
+                .help("Voice: \(chat.controls.state)")
+                if let counts = agents.counts {
+                    HStack(spacing: 2) {
+                        Image(systemName: "cpu").font(.system(size: 10, weight: .semibold))
+                        Text("\(counts.working)").font(.system(size: 11, weight: .semibold)).monospacedDigit()
+                    }
+                    .help("\(counts.working) of \(counts.total) Herdr agents working")
+                }
+                Text(WidgetReading.usd(numbers.snapshot.day(Date()).totalCost))
+                    .font(.system(size: 11, weight: .semibold)).monospacedDigit()
+                    .help("Cost today")
             }
             .foregroundStyle(theme.onSurface)
             .padding(.horizontal, 22)
@@ -273,28 +308,29 @@ struct StatusBar: View {
         .gesture(DragGesture(minimumDistance: 8).onEnded { if $0.translation.height > 12 { onPull() } })
     }
 
-    private var networkSymbol: String {
-        switch device.network {
-        case .wifi: "wifi"
-        case .wired: "cable.connector"
-        case .other: "antenna.radiowaves.left.and.right"
-        case .none: "wifi.slash"
+    /// The session's state in a word, as the rest of the phone says it.
+    private var linkWord: String {
+        let c = chat.controls
+        if !c.available || c.link == .disconnected { return "Off" }
+        if c.paused { return "Paused" }
+        if c.muted { return "Muted" }
+        // Short words: the right-hand group must stay clear of the camera.
+        return switch c.link {
+        case .connected: "Live"
+        case .idle: "Idle"
+        case .offline, .disconnected: "Off"
         }
     }
 
-    private func batterySymbol(_ percent: Int) -> String {
-        if device.charging { return "battery.100percent.bolt" }
-        return switch percent {
-        case 88...: "battery.100percent"
-        case 63...: "battery.75percent"
-        case 38...: "battery.50percent"
-        case 13...: "battery.25percent"
-        default: "battery.0percent"
-        }
+    private var linkColor: Color {
+        let c = chat.controls
+        if !c.available || c.link == .disconnected || c.link == .offline { return theme.error }
+        if c.paused || c.muted { return theme.tertiary }
+        return c.link == .connected ? theme.success : theme.onSurfaceVariant
     }
 }
 
-/// The navigation handle: home, or back to the orb from home.
+/// The navigation handle: back to the orb (the drawer up first, if it's down).
 struct GestureBar: View {
     let action: () -> Void
     @Environment(\.phoneTheme) private var theme
@@ -305,7 +341,7 @@ struct GestureBar: View {
             .contentShape(Rectangle())
             .onTapGesture(perform: action)
             .gesture(DragGesture(minimumDistance: 6).onEnded { if $0.translation.height < -8 { action() } })
-            .help("Home; from home, back to the orb")
+            .help("Back to the orb")
     }
 }
 
@@ -388,57 +424,9 @@ struct Chip: View {
     }
 }
 
-// MARK: home screen
+// MARK: apps (in the drawer)
 
-/// Her skills as apps: each harness she can control, each skill she learned, and empty "Teach me" slots while she
-/// knows little; Messages, Skills and Settings in the dock; a search pill that talks or types.
-struct HomeScreen: View {
-    @ObservedObject var controller: CompanionController
-    @ObservedObject var model: PhoneModel
-    @Environment(\.phoneTheme) private var theme
-
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)
-
-    var body: some View {
-        ZStack {
-            Wallpaper().padding(.top, -StatusBar.height)
-            VStack(alignment: .leading, spacing: 0) {
-                TimelineView(.everyMinute) { context in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(context.date, format: .dateTime.weekday(.wide).day().month(.abbreviated))
-                            .font(.system(size: 20, weight: .regular))
-                        Text("\(controller.name) · \(controller.chat.controls.state)")
-                            .font(.system(size: 12, weight: .medium)).foregroundStyle(theme.onSurfaceVariant)
-                    }
-                }
-                .foregroundStyle(theme.onSurface)
-                .padding(.horizontal, 22).padding(.top, 18)
-                Chip(symbol: controller.talkSymbol, text: controller.talkHint)
-                    .padding(.horizontal, 20).padding(.top, 12)
-                Spacer(minLength: 12)
-                LazyVGrid(columns: columns, spacing: 16) {
-                    ForEach(controller.homeApps) { app in
-                        AppIcon(app: app) { controller.openApp(app) }
-                    }
-                }
-                .padding(.horizontal, 12)
-                Spacer(minLength: 12)
-                LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(controller.dockApps) { app in
-                        AppIcon(app: app, showsLabel: false) { controller.openApp(app) }
-                    }
-                }
-                .padding(.vertical, 10).padding(.horizontal, 12)
-                .background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(theme.surfaceContainer.opacity(0.7)))
-                .padding(.horizontal, 10)
-                SearchPill(controller: controller, model: model)
-                    .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 30)
-            }
-        }
-    }
-}
-
-/// An app on the home screen: a harness, a learned skill, an empty slot to teach her one, or one of her own.
+/// An app in the drawer: a harness, a learned skill, an empty slot to teach her one, or one of her own.
 struct PhoneApp: Identifiable, Hashable {
     enum Kind: Hashable { case harness, skill, teach, messages, skills, settings, talk }
     let id: String
@@ -452,6 +440,7 @@ struct PhoneApp: Identifiable, Hashable {
 struct AppIcon: View {
     let app: PhoneApp
     var showsLabel = true
+    var size: CGFloat = 52
     let action: () -> Void
     @Environment(\.phoneTheme) private var theme
 
@@ -465,14 +454,15 @@ struct AppIcon: View {
                         Circle().fill(fill)
                     }
                     Image(systemName: app.symbol)
-                        .font(.system(size: 21, weight: .semibold))
+                        .font(.system(size: size * 0.4, weight: .semibold))
                         .foregroundStyle(app.kind == .teach ? theme.onSurfaceVariant : foreground)
                 }
-                .frame(width: 52, height: 52)
+                .frame(width: size, height: size)
                 .opacity(app.dimmed ? 0.45 : 1)
                 if showsLabel {
-                    Text(app.title).font(.system(size: 11, weight: .medium)).foregroundStyle(theme.onSurface)
-                        .lineLimit(1).truncationMode(.tail).frame(maxWidth: 66)
+                    Text(app.title).font(.system(size: size < 48 ? 10 : 11, weight: .medium)).foregroundStyle(theme.onSurface)
+                        .lineLimit(size < 48 ? 2 : 1).multilineTextAlignment(.center).truncationMode(.tail)
+                        .frame(maxWidth: 66)
                 }
             }
         }
@@ -545,27 +535,29 @@ struct AssistantSheet: View {
                 VStack(alignment: .leading, spacing: 8) {
                     if let you = lastLine(.you) {
                         Text(you).font(.system(size: 14)).foregroundStyle(theme.onSurfaceVariant).lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
                     }
                     Text(lastLine(.voice) ?? controller.conversationPrompt)
                         .font(.system(size: 18, weight: .regular)).foregroundStyle(theme.onSurface)
                         .lineLimit(5).fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 22)
+                .padding(.horizontal, 18)
                 .animation(.easeOut(duration: 0.2), value: chat.lines.count)
-                HStack(spacing: 10) {
+                HStack(spacing: 4) {
                     Chip(symbol: controller.handsFree ? "infinity" : "waveform", text: controller.conversationStatus)
                         .fixedSize()
-                    Spacer(minLength: 4)
+                    Spacer(minLength: 2)
                     RoundIcon(symbol: chat.controls.muted ? "mic.slash.fill" : "mic.fill", tinted: !chat.controls.muted,
-                              help: chat.controls.muteTitle) { controller.press(chat.controls.mutePress) }
+                              help: chat.controls.muteTitle, size: 38) { controller.press(chat.controls.mutePress) }
                         .overlay(FollowUpRing(live: live).allowsHitTesting(false))
-                    RoundIcon(symbol: "keyboard", tinted: false, help: "Type instead") { controller.phone.go(.messages) }
-                    RoundIcon(symbol: "xmark", tinted: false, help: "End the conversation (Esc)") {
+                        .padding(.horizontal, 3) // room for the countdown ring
+                    RoundIcon(symbol: "keyboard", tinted: false, help: "Type instead", size: 38) { controller.phone.go(.messages) }
+                    RoundIcon(symbol: "xmark", tinted: false, help: "End the conversation (Esc)", size: 38) {
                         controller.dismissConversation()
                     }
                 }
-                .padding(.horizontal, 18).padding(.bottom, 30)
+                .padding(.horizontal, 10).padding(.bottom, 30)
             }
             .background(UnevenRoundedRectangle(topLeadingRadius: 28, topTrailingRadius: 28, style: .continuous)
                 .fill(theme.surfaceContainerHigh))
@@ -581,6 +573,7 @@ struct RoundIcon: View {
     let symbol: String
     let tinted: Bool
     let help: String
+    var size: CGFloat = 44
     let action: () -> Void
     @Environment(\.phoneTheme) private var theme
 
@@ -588,7 +581,7 @@ struct RoundIcon: View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(tinted ? theme.onPrimary : theme.onSurface)
-                .frame(width: 44, height: 44)
+                .frame(width: size, height: size)
                 .background(Circle().fill(tinted ? theme.primary : theme.surfaceContainerHighest))
         }
         .buttonStyle(.plain)
@@ -605,7 +598,7 @@ struct FollowUpRing: View {
         if let left = live.frame.followUp {
             Circle().trim(from: 0, to: left).rotation(.degrees(-90))
                 .stroke(theme.tertiary, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                .frame(width: 52, height: 52)
+                .frame(width: 46, height: 46)
         }
     }
 }
@@ -665,16 +658,17 @@ struct LightBar: View {
 
 // MARK: shade
 
-/// Pulled down from the status bar: quick settings for the session, then what came in (agent reports, tool
-/// results, her changes and questions), newest first.
+/// The top drawer, pulled down from the status bar: her apps (each harness and learned skill, Chat, Skills,
+/// Settings), quick settings for the session, then what came in (agent reports, tool results, her changes and
+/// questions), newest first.
 struct Shade: View {
     @ObservedObject var controller: CompanionController
     @ObservedObject var chat: ChatModel
     @ObservedObject var model: PhoneModel
-    @ObservedObject var device: DeviceStatus
     @Environment(\.phoneTheme) private var theme
 
     private let columns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
+    private let appColumns = Array(repeating: GridItem(.flexible(), spacing: 4, alignment: .top), count: 4)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -690,6 +684,11 @@ struct Shade: View {
                 .foregroundStyle(theme.onSurface)
             }
             .padding(.top, 36)
+            LazyVGrid(columns: appColumns, spacing: 10) {
+                ForEach(controller.drawerApps) { app in
+                    AppIcon(app: app, size: 40) { controller.openApp(app) }
+                }
+            }
             LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(controller.quickTiles) { tile in QuickTile(tile: tile) }
             }
@@ -711,12 +710,8 @@ struct Shade: View {
                     ForEach(chat.notifications) { NotificationCard(line: $0, compact: false) }
                 }
             }
-            Capsule().fill(theme.onSurfaceVariant.opacity(0.5)).frame(width: 36, height: 4)
-                .frame(maxWidth: .infinity).padding(.vertical, 8)
-                .contentShape(Rectangle())
-                .onTapGesture { withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { model.shadeOpen = false } }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 14).padding(.bottom, 26)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(theme.surfaceContainer)
         .gesture(DragGesture(minimumDistance: 8).onEnded {
@@ -826,12 +821,15 @@ struct NotificationCard: View {
 struct PhoneScroll<Content: View>: View {
     @ViewBuilder let content: Content
     @Environment(\.phoneSnapshot) private var snapshot
+    @Environment(\.phoneSnapshotScroll) private var scrolled
 
     var body: some View {
         if snapshot {
-            // Top-aligned in a fixed frame: what overflows is cut at the bottom, as a scroll view at rest shows it.
+            // Top-aligned in a fixed frame: what overflows is cut at the bottom, as a scroll view at rest shows it
+            // (or scrolled by `phoneSnapshotScroll`).
             GeometryReader { geometry in
                 content.frame(width: geometry.size.width).fixedSize(horizontal: false, vertical: true)
+                    .offset(y: -scrolled)
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
                     .clipped()
             }

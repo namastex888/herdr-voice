@@ -17,6 +17,8 @@ import HerdrVoiceCore
     /// which spins the run loop: never while a view is being drawn, so views ask these instead.
     @Published private(set) var saved: Set<Provider> = []
     @Published private(set) var hasJevKey = false
+    /// Phoenix's API key (PHOENIX_API_KEY), for a Phoenix that asks for one.
+    @Published private(set) var hasPhoenixKey = false
     private let environment = ProcessInfo.processInfo.environment
 
     init() { reload() }
@@ -24,6 +26,21 @@ import HerdrVoiceCore
     func reload() {
         saved = Set(Self.providers.filter { key(for: $0) != nil })
         hasJevKey = jevKey != nil
+        hasPhoenixKey = phoenixKey != nil
+    }
+
+    nonisolated var phoenixKey: String? {
+        Keychain.password(service: PhoenixConfig.keyService)
+            ?? environment[PhoenixConfig.keyService].flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    func savePhoenixKey(_ raw: String) -> Bool {
+        guard let clean = Keychain.cleanKey(raw), Keychain.store(service: PhoenixConfig.keyService, value: clean) else {
+            return false
+        }
+        revision += 1
+        reload()
+        return true
     }
 
     func key(for provider: Provider) -> String? {
@@ -75,6 +92,8 @@ struct CompanionSettings: Equatable {
     /// After her reply, how long you can talk without the key.
     var followUpSeconds: Double
     var wakePhrase: String
+    /// `settings.phoenix`, compared to notice a change.
+    var phoenix: JSONValue?
 
     static let followUpRange: ClosedRange<Double> = 3...60
 
@@ -93,5 +112,6 @@ struct CompanionSettings: Equatable {
         wakePhrase = config["wakePhrase"]?.string.flatMap {
             $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0.trimmingCharacters(in: .whitespaces)
         } ?? WakePhrase.default
+        phoenix = config["phoenix"]
     }
 }

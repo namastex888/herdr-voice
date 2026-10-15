@@ -77,12 +77,13 @@ public struct Proposal: Codable, Sendable, Hashable {
 /// the human's settings (`humanSettingsKeys`) and the confirmation rules, is the human's, changed only in the app's
 /// own UI.
 public enum Governance {
-    public static let identityKeys: Set<String> = ["name", "role", "personality", "instructions"]
+    /// `userName`: what she calls the user ("Welcome back, Felipe").
+    public static let identityKeys: Set<String> = ["name", "role", "personality", "instructions", "userName"]
     public static let settingsKeys: Set<String> = ["voice", "routeWithJev", "jevModel"]
     /// Settings that are the human's: which voice model (and bill), and how and when she listens (also a bill). A
     /// reset and the assistant's own reverts keep them as they are.
     public static let humanSettingsKeys: Set<String> = ["provider", "activation", "activationKey", "followUpSeconds",
-                                                        "wakePhrase", "accent"]
+                                                        "wakePhrase", "accent", "dashboard", "phoenix"]
 
     /// `settings.provider`, `settings.activation`, ...
     public static func isHumanSetting(_ path: String) -> Bool {

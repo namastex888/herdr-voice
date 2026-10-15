@@ -641,7 +641,7 @@ public final class SkillRegistry: ToolHost, @unchecked Sendable { // all mutable
                 "op": ["type": "string", "enum": Proposal.Change.Op.allCases.map(\.rawValue),
                        "description": "set a field; append or removeValue a memory fact; addEntry or removeEntry a skill"]
                     as [String: Any],
-                "path": HerdrTools.str("identity.name|role|personality|instructions, memory.facts, "
+                "path": HerdrTools.str("identity.name|role|personality|instructions|userName, memory.facts, "
                     + "settings.voice|routeWithJev|jevModel, skill.<id> (addEntry, removeEntry) or skill.<id>.<field>"),
                 "value": ["description": "The new value: text, true/false, a list, or a skill's config "
                     + "{title, summary, needs, steps, playbook}"] as [String: Any],

@@ -56,6 +56,9 @@ public final class Audio: @unchecked Sendable {
     /// Called on main when playback starts or stops, so Esc can be grabbed and released on the transition
     /// instead of being polled every frame.
     @MainActor public var onSpeakingChanged: ((Bool) -> Void)?
+    /// Each chunk of her voice as it is queued to play (PCM16 24 kHz) with its item, on main: the companion keeps it
+    /// as her voice notes. Nothing is played while paused, so nothing paused is passed on.
+    @MainActor public var onPlayed: ((Data, String) -> Void)?
 
     /// Nonisolated on purpose, though called from main: the sink and tap blocks made here run on audio threads.
     public func start() throws {
@@ -152,6 +155,7 @@ public final class Audio: @unchecked Sendable {
     /// Queues one base64 PCM16 chunk of assistant audio.
     @MainActor public func play(base64: String, item: String) {
         guard let data = Data(base64Encoded: base64), !data.isEmpty else { return }
+        onPlayed?(data, item)
         let frames = data.count / 2
         guard let buf = AVAudioPCMBuffer(pcmFormat: float24k, frameCapacity: AVAudioFrameCount(frames)) else { return }
         buf.frameLength = AVAudioFrameCount(frames)
