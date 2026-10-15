@@ -101,9 +101,9 @@ extension CompanionController {
 
     private func perform(_ effect: TurnTaking.Effect) {
         switch effect {
-        case .prewarm:
-            session?.prewarm()
-        case .cancelPrewarm:
+        case .buffer:
+            session?.buffer()
+        case .discard:
             session?.rest("not a tap", quietly: true)
         case .open:
             session?.listen()

@@ -69,6 +69,9 @@ import os
             if capabilities.deferredReplies, status == .live { send(.deferReplies(deferReplies)) }
         }
     }
+    /// The activation key is down and not yet a tap: the mic's speech is kept here, never streamed, and doesn't open
+    /// a session (`buffer`).
+    public private(set) var buffering = false { didSet { syncSendGate() } }
     /// `start()` ran: the audio engine exists, so voice processing can be switched.
     private var audioStarted = false
     /// Replies to spoken turns wait for `submitTurn`.
@@ -362,7 +365,7 @@ import os
     /// after giving up. Never while a retry is already scheduled: speech must not defeat the backoff, or every
     /// sound during an outage would hammer the provider with connects.
     private func wake() {
-        guard status == .disconnected, !micIdle, !retryPending, !providerPreparing else { return }
+        guard status == .disconnected, !micIdle, !buffering, !retryPending, !providerPreparing else { return }
         if dormant {
             dormant = false
             attempts = 0
@@ -373,6 +376,8 @@ import os
 
     private func activateHeldAudio() -> Bool {
         let wire = wire, socket = socket, connection = connection, live = status == .live
+        // A key press still unresolved (a session came up for something else): keep its audio for the tap.
+        guard !buffering else { return false }
         return micShared.withLock { s in
             let held = s.held.drain()
             let hadAudio = held.utteranceID != nil || !held.chunks.isEmpty
@@ -606,7 +611,8 @@ import os
     /// The mic queue reads these two under `micShared`: whether the mic is off, and whether it may stream now.
     private func syncSendGate() {
         let off = micOff, standby = standby, localTurns = localTurns
-        let allowed = !off && !standby && status == .live && established
+        // While buffering nothing streams, even to a session that happens to be up: the press may be ⌘C.
+        let allowed = !off && !standby && !buffering && status == .live && established
         micShared.withLock {
             $0.muted = off
             $0.standby = standby
@@ -836,20 +842,25 @@ import os
         if on { micShared.withLock { $0.held.reset() } }
     }
 
-    /// The activation key went down and may be a tap: keep the mic's speech for a session and start connecting, so
-    /// none of it is lost. Leaves a disconnect alone: only the tap itself (`listen`) is a request to talk.
-    public func prewarm() {
+    /// The activation key went down and may be a tap: keep the mic's speech here, so none of it is lost, but connect
+    /// nothing and stream nothing (a key-down may be the start of ⌘C, and a stray connect is billed). `listen` sends
+    /// what was kept once the press turns out to be a tap; `rest` drops it.
+    public func buffer() {
         guard !disconnectedByUser else { return }
+        buffering = true
         setStandby(false)
-        openIfClosed()
     }
 
     /// Starts a conversation the user asked for (a tap, the wake word): the mic leaves standby and the session opens
-    /// now if it's closed; speech meanwhile is held and sent once it's up. An explicit request, like typing, so it
-    /// also ends a disconnect.
+    /// now if it's closed; speech meanwhile (and what `buffer` kept) is held and sent once it's up. An explicit
+    /// request, like typing, so it also ends a disconnect.
     public func listen() {
+        let wasBuffering = buffering
+        buffering = false
         setStandby(false)
         if disconnectedByUser { return reconnect() }
+        // Already up (her report reopened it): what was kept goes now, ahead of the live mic.
+        if wasBuffering, status == .live, established { _ = activateHeldAudio() }
         openIfClosed()
     }
 
@@ -863,6 +874,7 @@ import os
     /// and the session closes like a quiet one, so billing stops (an agent report still reopens it). `quietly` keeps
     /// it out of the UI (a cancelled key press is not news).
     public func rest(_ why: String, quietly: Bool = false) {
+        buffering = false
         setStandby(true)
         submitWhenUp = false
         if responseActive || audio.isSpeaking { stopSpeech(reason: why) }

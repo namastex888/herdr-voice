@@ -12,9 +12,9 @@ private func run(_ machine: inout TurnTaking, _ steps: [(TurnTaking.Event, TimeI
 
 // MARK: taps
 
-@Test func aTapPrewarmsOnTheKeyAndOpensOnRelease() {
+@Test func aTapBuffersOnTheKeyAndOpensOnRelease() {
     var m = TurnTaking()
-    #expect(m.handle(.keyDown, at: at(0)) == [.prewarm])
+    #expect(m.handle(.keyDown, at: at(0)) == [.buffer])
     #expect(m.handle(.keyUp, at: at(0.15)) == [.open])
     #expect(m.phase == .listening(heard: false, since: at(0.15)))
 }
@@ -22,25 +22,43 @@ private func run(_ machine: inout TurnTaking, _ steps: [(TurnTaking.Event, TimeI
 @Test func anotherKeyWhileDownCancelsAndNeverOpens() {
     var m = TurnTaking()
     let effects = run(&m, [(.keyDown, 0), (.otherKey, 0.1), (.otherKey, 0.12), (.keyUp, 0.2)])
-    #expect(effects == [.prewarm, .cancelPrewarm])
+    #expect(effects == [.buffer, .discard])
     #expect(m.phase == .idle)
+}
+
+/// Only `open` connects (`buffer` keeps audio locally). A chord, or a long hold, never asks for a connection; a tap
+/// asks once, on release.
+@Test func aChordNeverAsksToConnectATapDoesOnce() {
+    let chords: [[(TurnTaking.Event, TimeInterval)]] = [
+        [(.keyDown, 0), (.otherKey, 0.05), (.keyUp, 0.1)],              // ⌘C
+        [(.keyDown, 0), (.otherKey, 0.3), (.otherKey, 0.4), (.keyUp, 0.5)], // ⌘⇧4
+        [(.keyDown, 0), (.keyUp, 1.5)],                                 // held while deciding
+    ]
+    for chord in chords {
+        var m = TurnTaking()
+        let effects = run(&m, chord)
+        #expect(!effects.contains(.open) && m.phase == .idle, "\(effects)")
+    }
+    var m = TurnTaking()
+    #expect(m.handle(.keyDown, at: at(0)) == [.buffer]) // nothing connects on the way down
+    #expect(m.handle(.keyUp, at: at(0.12)) == [.open])
 }
 
 @Test func aLongHoldIsNotATap() {
     var m = TurnTaking()
-    #expect(run(&m, [(.keyDown, 0), (.keyUp, 2)]) == [.prewarm, .cancelPrewarm])
+    #expect(run(&m, [(.keyDown, 0), (.keyUp, 2)]) == [.buffer, .discard])
     #expect(m.phase == .idle)
 }
 
 @Test func tappingAgainWithNothingSaidDismisses() {
     var m = TurnTaking()
-    #expect(run(&m, [(.keyDown, 0), (.keyUp, 0.1), (.keyDown, 2), (.keyUp, 2.1)]) == [.prewarm, .open, .close])
+    #expect(run(&m, [(.keyDown, 0), (.keyUp, 0.1), (.keyDown, 2), (.keyUp, 2.1)]) == [.buffer, .open, .close])
     #expect(m.phase == .idle)
 }
 
 @Test func aDoubleTapIsHandsFreeUntilAnotherDoubleTap() {
     var m = TurnTaking()
-    #expect(run(&m, [(.keyDown, 0), (.keyUp, 0.1), (.keyDown, 0.25), (.keyUp, 0.3)]) == [.prewarm, .open])
+    #expect(run(&m, [(.keyDown, 0), (.keyUp, 0.1), (.keyDown, 0.25), (.keyUp, 0.3)]) == [.buffer, .open])
     #expect(m.handsFree)
     // Hands-free: speech, cooldown, reply, and back to listening with no follow-up countdown.
     #expect(run(&m, [(.speechStarted, 1), (.speechStopped, 3), (.tick, 3.6)]) == [.submit])

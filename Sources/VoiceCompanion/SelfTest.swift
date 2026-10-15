@@ -184,7 +184,7 @@ import VoiceEngine
     return session
 }
 
-/// Tap-to-talk on the same never-started session, with made-up times: the key's prewarm and a chord's cancel, a
+/// Tap-to-talk on the same never-started session, with made-up times: the key's buffering and a chord's discard, a
 /// tap, speech and the cooldown, her reply and the follow-up window running out, a double tap and Esc.
 @MainActor private func checkActivation(_ controller: CompanionController, _ session: Realtime,
                                         _ check: (String, Bool, String) -> Void) {
@@ -196,11 +196,12 @@ import VoiceEngine
     func phase() -> String { "\(controller.conversation)" }
 
     controller.activation(.keyDown, at: at(0))
-    let prewarmed = !session.standby
+    let buffering = !session.standby && session.buffering
     controller.activation(.otherKey, at: at(0.1)) // ⌘C
     controller.activation(.keyUp, at: at(0.2))
-    check("⌘C never activates: the key's prewarm goes back to standby",
-          prewarmed && session.standby && controller.conversation == .idle, phase())
+    check("⌘C never activates: the key only buffered, nothing connected or showed, and it's dropped",
+          buffering && session.standby && !session.buffering && controller.conversation == .idle
+              && !controller.phone.expanded, phase())
 
     controller.activation(.keyDown, at: at(1))
     controller.activation(.keyUp, at: at(1.1))

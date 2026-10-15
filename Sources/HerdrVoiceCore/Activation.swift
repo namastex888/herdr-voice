@@ -160,11 +160,12 @@ public struct TurnTaking: Sendable {
     }
 
     public enum Effect: Equatable, Sendable {
-        /// The key went down from idle: start keeping mic audio and connect, in case this is a tap.
-        case prewarm
-        /// It was a chord after all (or held too long): back to standby, keeping nothing.
-        case cancelPrewarm
-        /// Show the conversation and listen (connect if the prewarm didn't).
+        /// The key went down from idle: start keeping the mic's audio here, in case this is a tap. Nothing connects:
+        /// a key-down may be the start of ⌘C, and a stray connect is billed.
+        case buffer
+        /// It was a chord after all (or held too long): back to standby, the kept audio dropped.
+        case discard
+        /// A real tap (or the wake word): connect, send what was kept, show the conversation and listen.
         case open
         /// Ask for the reply to what was heard.
         case submit
@@ -206,7 +207,8 @@ public struct TurnTaking: Sendable {
     public private(set) var handsFree = false
     private var keyDownAt: Date?
     private var chord = false
-    private var prewarmed = false
+    /// Mic audio is being kept for a key press that hasn't resolved yet.
+    private var buffering = false
     private var lastTap: Date?
     /// The reply to the submitted turn has started (she got busy), so her going quiet means she finished.
     private var replyStarted = false
@@ -219,17 +221,17 @@ public struct TurnTaking: Sendable {
             keyDownAt = now
             chord = false
             guard phase.isIdle else { return [] }
-            prewarmed = true
-            return [.prewarm]
+            buffering = true
+            return [.buffer]
         case .otherKey:
             guard keyDownAt != nil, !chord else { return [] }
             chord = true
-            return takePrewarm()
+            return discard()
         case .keyUp:
             guard let down = keyDownAt else { return [] }
             keyDownAt = nil
-            if chord || now.timeIntervalSince(down) > timing.tapMax { return takePrewarm() }
-            prewarmed = false
+            if chord || now.timeIntervalSince(down) > timing.tapMax { return discard() }
+            buffering = false
             return tap(at: now)
         case .tap:
             return tap(at: now)
@@ -270,7 +272,7 @@ public struct TurnTaking: Sendable {
             phase = .idle
             handsFree = false
             replyStarted = false
-            prewarmed = false
+            buffering = false
             return []
         case .tick:
             return tick(at: now)
@@ -295,10 +297,10 @@ public struct TurnTaking: Sendable {
         return min(1, max(0, now.timeIntervalSince(since) / total))
     }
 
-    private mutating func takePrewarm() -> [Effect] {
-        guard prewarmed else { return [] }
-        prewarmed = false
-        return [.cancelPrewarm]
+    private mutating func discard() -> [Effect] {
+        guard buffering else { return [] }
+        buffering = false
+        return [.discard]
     }
 
     private mutating func tap(at now: Date) -> [Effect] {
