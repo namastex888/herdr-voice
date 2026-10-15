@@ -45,9 +45,12 @@ public struct CompanionHarness: Harness {
         case appleScript(Bool)
         case shell(Bool)
         case resetToNewHire
+        /// What the cockpit shows: widgets and sections, shown, hidden or reordered.
+        case dashboard(DashboardLayout.Edit)
     }
 
     public static let screens = ["home", "chat", "messages", "conversations", "settings", "skills", "shade", "lock"]
+        + DashboardItem.allCases.filter(\.isWidget).map(\.rawValue)
     static let followUpRange: ClosedRange<Double> = 3...60
 
     private let app: (any CompanionApp)?
@@ -64,7 +67,7 @@ public struct CompanionHarness: Harness {
     public var summary: String {
         "Her own app: mute or pause the session, disconnect, stop speaking; show the phone's screens or put it away; "
             + "how she listens (tap to talk, wake word, always on), the follow-up time and wake phrase, her voice, "
-            + "routing, the voice model, harnesses, AppleScript, the shell, and a reset."
+            + "routing, the voice model, harnesses, AppleScript, the shell, a reset, and what the cockpit shows."
     }
     public var isAvailable: Bool { app != nil }
     public var actions: ToolList { ToolList(Self.schemas) }
@@ -178,6 +181,15 @@ public struct CompanionHarness: Harness {
         case .resetToNewHire:
             try registry.applyUserEdit("Reset to a new hire (by voice)") { $0 = $0.resetToNewHire() }
             return "Done: I'm a new hire again. You can undo it from How I've changed."
+        case .dashboard(let change):
+            var layout = DashboardLayout()
+            try registry.applyUserEdit("Dashboard changed (by voice)") { tree in
+                guard var settings = tree["settings"] else { throw ComponentError("there is no settings entry") }
+                layout = DashboardLayout(settings.config["dashboard"]).applying(change)
+                settings.config["dashboard"] = layout.json
+                tree["settings"] = settings
+            }
+            return "Done: the cockpit shows \(layout.summary)."
         }
     }
 
@@ -252,6 +264,7 @@ public struct CompanionHarness: Harness {
         case "set_applescript": return .appleScript(try flag("on"))
         case "set_shell": return .shell(try flag("on"))
         case "reset_to_new_hire": return .resetToNewHire
+        case "set_dashboard": return .dashboard(try DashboardLayout.Edit(arguments: args))
         default: throw ComponentError("there is no app control called \(name)")
         }
     }
@@ -285,6 +298,7 @@ public struct CompanionHarness: Harness {
         case .appleScript(let on): on ? "may I allow AppleScript" : "may I stop AppleScript"
         case .shell(let on): on ? "may I switch on the shell" : "may I switch off the shell"
         case .resetToNewHire: "may I reset myself to a new hire, forgetting every skill and fact"
+        case .dashboard: "may I change what the cockpit shows"
         }
     }
 
@@ -314,7 +328,8 @@ public struct CompanionHarness: Harness {
             HerdrTools.fn("stop_speaking", "Stop what she is saying.", ["confirmed": confirmed], []),
             HerdrTools.fn("show_screen", "Open the phone on a screen: home (the cockpit), chat (this conversation as "
                           + "voice notes), conversations (the kept ones), settings, skills, shade (the drawer: apps, "
-                          + "quick settings and notifications) or lock. A tap only lights the orb; open the phone only when "
+                          + "quick settings and notifications), lock, or a cockpit widget's chart by its id (cost, talk, "
+                          + "agents, agentTime, latency, actions, approvals, errors, conversations). A tap only lights the orb; open the phone only when "
                           + "there is something to see (a list, a link, a result), and it goes away by itself a few "
                           + "seconds after you finish talking about it.",
                           ["screen": ["type": "string", "enum": screens], "confirmed": confirmed], ["screen"]),
@@ -347,6 +362,15 @@ public struct CompanionHarness: Harness {
                           + "spoken yes.", ["on": on, "confirmed": confirmed], ["on"]),
             HerdrTools.fn("set_shell", "Switch shell commands on or off. Switching on always needs the user's spoken yes.",
                           ["on": on, "confirmed": confirmed], ["on"]),
+            HerdrTools.fn("set_dashboard", "Change what the cockpit (the phone's home) shows. Widgets: "
+                          + DashboardItem.allCases.filter(\.isWidget).map(\.rawValue).joined(separator: ", ")
+                          + ". Sections: running, recent, week, trend. Give whole new orders (widgets, sections), or "
+                          + "items to show, hide, or put on top, e.g. top=agentTime, hide=[trend]. " + askAgain,
+                          ["widgets": ["type": "array", "items": ["type": "string"], "description": "The widgets, in order"],
+                           "sections": ["type": "array", "items": ["type": "string"], "description": "The sections, in order"],
+                           "show": ["type": "array", "items": ["type": "string"]],
+                           "hide": ["type": "array", "items": ["type": "string"]],
+                           "top": HerdrTools.str("One widget or section to put first"), "confirmed": confirmed], []),
             HerdrTools.fn("reset_to_new_hire", "Reset her to a new hire: every skill, fact and learned instruction is "
                           + "forgotten (it can be undone). Always needs the user's spoken yes.", ["confirmed": confirmed], []),
         ]

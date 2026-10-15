@@ -141,6 +141,11 @@ private struct SnapshotKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+/// Rendering to an image: how far the scrolled content is scrolled (a render can't scroll).
+private struct SnapshotScrollKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
 extension EnvironmentValues {
     var phoneTheme: PhoneTheme {
         get { self[ThemeKey.self] }
@@ -150,5 +155,10 @@ extension EnvironmentValues {
     var phoneSnapshot: Bool {
         get { self[SnapshotKey.self] }
         set { self[SnapshotKey.self] = newValue }
+    }
+
+    var phoneSnapshotScroll: CGFloat {
+        get { self[SnapshotScrollKey.self] }
+        set { self[SnapshotScrollKey.self] = newValue }
     }
 }

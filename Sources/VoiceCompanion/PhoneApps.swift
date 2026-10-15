@@ -317,6 +317,7 @@ struct SettingsScreen: View {
                     memory
                     voice
                     keysCard
+                    cockpit
                     prices
                     routing
                     look
@@ -396,6 +397,9 @@ struct SettingsScreen: View {
     private var identity: some View {
         Card(title: "Identity", footer: "She can propose changes to these too; hers apply only after your yes.") {
             PhoneField("Name", value: controller.identity("name")) { controller.setIdentity("name", $0) }
+            PhoneField("What she calls you", value: controller.identity("userName"), placeholder: controller.userName) {
+                controller.setIdentity("userName", $0)
+            }
             PhoneField("Role", value: controller.identity("role")) { controller.setIdentity("role", $0) }
             PhoneField("Personality", value: controller.identity("personality"), lines: 3) {
                 controller.setIdentity("personality", $0)
@@ -442,6 +446,19 @@ struct SettingsScreen: View {
                 PhoneField("\(provider.menuTitle) key\(keys.hasKey(provider) ? " (saved)" : "")", value: "",
                            placeholder: keys.hasKey(provider) ? "Saved; paste to replace" : "Paste a key", secure: true) {
                     controller.saveKey($0, for: provider)
+                }
+            }
+        }
+    }
+
+    /// Which widgets and sections the cockpit shows; she changes it by voice too ("put agent time on top").
+    private var cockpit: some View {
+        let layout = controller.dashboard
+        return Card(title: "Cockpit", footer: "Or say it: “put agent time on top”, “hide the cost trend”.") {
+            ForEach(DashboardItem.allCases) { item in
+                let shown = layout.widgets.contains(item) || layout.sections.contains(item)
+                SwitchRow(title: item.title, detail: item.isWidget ? nil : "Section", isOn: shown) { on in
+                    controller.setDashboard(on ? .init(show: [item]) : .init(hide: [item]))
                 }
             }
         }
@@ -618,7 +635,7 @@ private struct HarnessRow: View {
         VStack(alignment: .leading, spacing: 4) {
             SwitchRow(title: harness.title,
                       detail: (harness.status == .active ? (loaded ? "On · loaded" : "On") : harness.statusText)
-                          + " · \(harness.actions.count) actions",
+                          + " · \(harness.actions.count) action\(harness.actions.count == 1 ? "" : "s")",
                       isOn: harness.on) { controller.setHarness(harness.id, on: $0) }
             Button("See its controls") { model.go(.app(harness.id)) }
                 .buttonStyle(.plain).font(.system(size: 11, weight: .medium)).foregroundStyle(theme.primary)

@@ -179,7 +179,7 @@ struct VoiceNoteView: View {
         HStack {
             if mine { Spacer(minLength: 36) }
             VStack(alignment: .leading, spacing: 6) {
-                if !transcriptOnly && clip.seconds > 0 {
+                if hasAudio {
                     HStack(spacing: 8) {
                         Button(action: play) {
                             Image(systemName: playing ? "stop.fill" : "play.fill").font(.system(size: 12, weight: .bold))
@@ -202,7 +202,7 @@ struct VoiceNoteView: View {
                 .foregroundStyle(clip.text == nil ? text.opacity(0.6) : text)
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
-            .frame(maxWidth: 220, alignment: .leading)
+            .frame(width: hasAudio ? 224 : nil, alignment: .leading)
             .background(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: mine ? 18 : 5,
                                                bottomTrailingRadius: mine ? 5 : 18, topTrailingRadius: 18,
                                                style: .continuous).fill(mine ? theme.primaryContainer : theme.surfaceContainerHigh))
@@ -211,6 +211,7 @@ struct VoiceNoteView: View {
     }
 
     private var text: Color { mine ? theme.onPrimaryContainer : theme.onSurface }
+    private var hasAudio: Bool { !transcriptOnly && clip.seconds > 0 }
 
     static func duration(_ seconds: Double) -> String {
         let whole = max(1, Int(seconds.rounded()))

@@ -56,6 +56,17 @@ import VoiceEngine
         }
     }
 
+    /// Herdr agents' working time, sampled (see AgentsWatcher).
+    func agentTime(_ seconds: Double, at now: Date = Date()) {
+        update(now) { $0.agentSeconds += seconds }
+    }
+
+    /// How many Herdr agents were working at the last look (the day keeps the most at once).
+    func agentsWorking(_ count: Int, at now: Date = Date()) {
+        guard count > ledger.day(now).agentsPeak else { return }
+        update(now) { $0.agentsPeak = count }
+    }
+
     func conversationStarted(at now: Date = Date()) {
         update(now) { $0.conversations += 1 }
     }

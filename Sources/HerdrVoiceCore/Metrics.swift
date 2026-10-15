@@ -26,8 +26,45 @@ public struct DayMetrics: Codable, Equatable, Sendable {
     public var latencyMsTotal = 0.0
     public var latencyCount = 0
     public var latencyMsMax = 0.0
+    /// Herdr agents' working time, sampled while Vox runs.
+    public var agentSeconds = 0.0
+    /// The most Herdr agents seen working at once.
+    public var agentsPeak = 0
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case cost, estimated, connectedSeconds, tokens, userTalkSeconds, voxTalkSeconds, conversations, turns, actions
+        case delegations, approvalsAsked, approvalsGiven, interruptions, errors, latencyMsTotal, latencyCount
+        case latencyMsMax, agentSeconds, agentsPeak
+    }
+
+    /// Tolerant: a field a newer or older Vox didn't write reads as zero, so the file never resets.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func value<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T {
+            (try? c.decodeIfPresent(T.self, forKey: key)) ?? fallback
+        }
+        cost = value(.cost, [:])
+        estimated = value(.estimated, [])
+        connectedSeconds = value(.connectedSeconds, [:])
+        tokens = value(.tokens, [:])
+        userTalkSeconds = value(.userTalkSeconds, 0)
+        voxTalkSeconds = value(.voxTalkSeconds, 0)
+        conversations = value(.conversations, 0)
+        turns = value(.turns, 0)
+        actions = value(.actions, 0)
+        delegations = value(.delegations, 0)
+        approvalsAsked = value(.approvalsAsked, 0)
+        approvalsGiven = value(.approvalsGiven, 0)
+        interruptions = value(.interruptions, 0)
+        errors = value(.errors, 0)
+        latencyMsTotal = value(.latencyMsTotal, 0)
+        latencyCount = value(.latencyCount, 0)
+        latencyMsMax = value(.latencyMsMax, 0)
+        agentSeconds = value(.agentSeconds, 0)
+        agentsPeak = value(.agentsPeak, 0)
+    }
 
     public var totalCost: Double { cost.values.reduce(0, +) }
     public var talkSeconds: Double { userTalkSeconds + voxTalkSeconds }

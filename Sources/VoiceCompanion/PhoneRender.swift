@@ -13,6 +13,8 @@ import VoiceEngine
         var shade = false
         var morph: CGFloat = 1
         var frame = LiveLevels.Frame()
+        /// How far scrolled content is scrolled.
+        var scroll: CGFloat = 0
     }
 
     /// Every screen, the orb, a frame of the morph between them, and a conversation's sheet.
@@ -25,12 +27,14 @@ import VoiceEngine
             Shot(name: "morph", screen: .lock, morph: 0.45, frame: listening),
             Shot(name: "lock", screen: .lock),
             Shot(name: "home", screen: .home),
+            Shot(name: "home-sections", screen: .home, scroll: 330),
             Shot(name: "chat", screen: .messages),
             Shot(name: "conversations", screen: .conversations),
             Shot(name: "settings", screen: .settings),
             Shot(name: "skills", screen: .skills),
-            Shot(name: "shade", screen: .home, shade: true),
+            Shot(name: "drawer", screen: .home, shade: true),
         ]
+        shots += DashboardItem.allCases.filter(\.isWidget).map { Shot(name: "detail-\($0.rawValue)", screen: .detail($0)) }
         if let appID { shots.append(Shot(name: "app", screen: .app(appID))) }
         return shots
     }
@@ -45,8 +49,9 @@ import VoiceEngine
         controller.live.show(shot.frame)
         let size = CGSize(width: PhoneWindow.phoneSize.width + PhoneWindow.pad * 2,
                           height: PhoneWindow.phoneSize.height + PhoneWindow.pad * 2)
-        let root = PhoneRoot(controller: controller, model: phone, live: controller.live, device: controller.device)
+        let root = PhoneRoot(controller: controller, model: phone, live: controller.live)
             .environment(\.phoneSnapshot, true)
+            .environment(\.phoneSnapshotScroll, shot.scroll)
             .frame(width: size.width, height: size.height)
             .background(Color(red: 0.11, green: 0.12, blue: 0.14)) // a desktop behind it, so the glow shows
         let renderer = ImageRenderer(content: root)
@@ -138,6 +143,40 @@ import VoiceEngine
     chat.append(.voice("Want me to learn that as a skill called Focus?"))
     chat.append(.note("← claude-code settled"))
     stageVoiceNotes(controller)
+    stageCockpit(controller)
+}
+
+/// A week of numbers and three Herdr agents, so the cockpit shows what a used Vox looks like.
+@MainActor func stageCockpit(_ controller: CompanionController) {
+    var ledger = MetricsLedger()
+    let calendar = Calendar.current, today = Date()
+    for back in 0..<14 {
+        guard let date = calendar.date(byAdding: .day, value: -back, to: today) else { continue }
+        let wave = 1 + sin(Double(back) * 0.9)
+        ledger.update(date) { day in
+            day.addCost(0.18 * wave, provider: "grok", estimated: false)
+            if back % 3 == 0 { day.addCost(0.11 * wave, provider: "openai", estimated: false) }
+            day.conversations = 2 + back % 4
+            day.turns = 9 + back % 5
+            day.actions = 6 + back % 7
+            day.delegations = back % 3
+            day.approvalsAsked = 2 + back % 2
+            day.approvalsGiven = 2
+            day.userTalkSeconds = 140 + 40 * wave
+            day.voxTalkSeconds = 210 + 50 * wave
+            day.latencyMsTotal = Double(day.turns) * (780 + 120 * wave)
+            day.latencyCount = day.turns
+            day.agentSeconds = 3600 * (1.2 + wave)
+            day.agentsPeak = 1 + back % 4
+            day.errors = back % 4 == 1 ? 1 : 0
+        }
+    }
+    controller.numbers.stage(ledger)
+    controller.agents.stage([
+        RunningAgent(target: "fix-login", kind: "claude", status: "working", title: "Fixing the login redirect"),
+        RunningAgent(target: "docs-pass", kind: "codex", status: "blocked", title: "Needs approval to run tests"),
+        RunningAgent(target: "claude-3", kind: "claude", status: "done", title: "Release notes"),
+    ])
 }
 
 /// A short spoken exchange through the recorder, as the session would feed it: your speech as sent, her audio as
@@ -172,6 +211,7 @@ func syntheticSpeech(seconds: Double, seed: Double) -> Data {
     controller.attach(session)
     session.onUserTurn = nil
     controller.activation(.tap)
+    controller.phoneReason = .user // the sheet rises over what you opened yourself
     controller.chat.append(.you("What's on my calendar this afternoon?"))
     controller.chat.append(.voice("Two things: design review at three, and a call with Ana at four thirty."))
 }

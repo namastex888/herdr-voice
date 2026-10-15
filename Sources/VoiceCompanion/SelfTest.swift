@@ -27,7 +27,7 @@ import VoiceEngine
     let registry = controller.registry
 
     let window = PhoneWindow(model: controller.phone, content: PhoneRoot(controller: controller, model: controller.phone,
-                                                                         live: controller.live, device: controller.device))
+                                                                         live: controller.live))
     controller.phoneWindow = window
     window.showOrb()
     let orbFrame = window.panel.frame
@@ -105,6 +105,7 @@ import VoiceEngine
     checkVoiceMode(controller, session, gate, check)
     checkMetrics(controller, session, check)
     checkVoiceChat(controller, check)
+    checkCockpit(controller, check)
     checkPhone(controller, window, check)
 
     window.panel.orderOut(nil)
@@ -387,6 +388,38 @@ import VoiceEngine
     check("conversations are kept until you delete one, or all", two == 2 && one == 1 && store.list().isEmpty,
           "\(two) → \(one) → \(store.list().count)")
     stageVoiceNotes(controller) // for the screens below
+}
+
+/// The cockpit: welcome by name, the four headline widgets with their bases (Shipped not measured), the sections,
+/// the apps and quick toggles in the drawer, a widget's chart by voice, and the layout changed by voice at once.
+@MainActor private func checkCockpit(_ controller: CompanionController, _ check: (String, Bool, String) -> Void) {
+    let registry = controller.registry
+    stageCockpit(controller)
+    let layout = controller.dashboard, today = controller.numbers.snapshot.day(Date())
+    let readings = layout.widgets.map { WidgetReading.of($0, day: today, agents: controller.agents.counts) }
+    check("home is the cockpit: welcome by name, cost, talk time, agents working and shipped, each with its base",
+          !controller.userName.isEmpty && layout.widgets == [.cost, .talk, .agents, .shipped]
+              && layout.sections == [.running, .recent, .week, .trend]
+              && readings[2].value == "1" && readings[2].base == "of 3 agents in Herdr"
+              && !readings[3].measured && readings.allSatisfy { !$0.base.isEmpty },
+          "Welcome back, \(controller.userName): " + readings.map(\.value).joined(separator: " · "))
+
+    let drawer = controller.drawerApps.map(\.id)
+    check("the apps and quick toggles live in the drawer",
+          ["harness.mac", "harness.herdr", "messages", "skills", "settings"].allSatisfy(drawer.contains)
+              && controller.quickTiles.map(\.id).contains("mic"), drawer.joined(separator: ", "))
+
+    _ = registry.call("show_screen", arguments: json(["screen": "talk"]), userInitiated: true)
+    let detail = controller.phone.screen == .detail(.talk)
+    controller.collapsePhone()
+    let changes = registry.changes.count
+    let said = registry.call("set_dashboard", arguments: json(["top": "agent time", "hide": ["cost trend"]]),
+                             userInitiated: true).output
+    RunLoop.main.run(until: Date().addingTimeInterval(0.05)) // the settle reaches the controller
+    check("a widget's chart opens by voice, and “put agent time on top, hide the cost trend” applies at once",
+          detail && controller.dashboard.widgets.first == .agentTime && !controller.dashboard.sections.contains(.trend)
+              && registry.changes.count == changes + 1, said)
+    controller.setDashboard(.init(widgets: DashboardItem.defaultWidgets, sections: DashboardItem.defaultSections))
 }
 
 /// Voice mode: a tap lights the orb without the phone; the phone rises for what she shows or asks, and goes back

@@ -79,7 +79,8 @@ extension CompanionController {
 
     // MARK: what the screens list
 
-    var homeApps: [PhoneApp] {
+    /// The drawer's apps: each harness and learned skill, a slot to teach her one, then Chat, Skills and Settings.
+    var drawerApps: [PhoneApp] {
         var apps = harnesses.map { harness in
             PhoneApp(id: harness.id, kind: .harness, title: harness.title, symbol: Self.symbol(harness: harness.name),
                      dimmed: harness.status != .active)
@@ -87,16 +88,11 @@ extension CompanionController {
         apps += skills.map {
             PhoneApp(id: $0.id, kind: .skill, title: $0.skill.title, symbol: "sparkles", dimmed: $0.status != .active)
         }
-        let slots = max(1, 4 - skills.count)
-        apps += (0..<slots).map { PhoneApp(id: "teach.\($0)", kind: .teach, title: "Teach me", symbol: "plus") }
-        return Array(apps.prefix(12))
-    }
-
-    var dockApps: [PhoneApp] {
-        [PhoneApp(id: "messages", kind: .messages, title: "Chat", symbol: "waveform.and.person.filled"),
-         PhoneApp(id: "talk", kind: .talk, title: "Talk", symbol: "mic.fill"),
-         PhoneApp(id: "skills", kind: .skills, title: "Skills", symbol: "square.grid.2x2.fill"),
-         PhoneApp(id: "settings", kind: .settings, title: "Settings", symbol: "gearshape.fill")]
+        apps.append(PhoneApp(id: "teach", kind: .teach, title: "Teach me", symbol: "plus"))
+        let own = [PhoneApp(id: "messages", kind: .messages, title: "Chat", symbol: "waveform.and.person.filled"),
+                   PhoneApp(id: "skills", kind: .skills, title: "Skills", symbol: "square.grid.2x2.fill"),
+                   PhoneApp(id: "settings", kind: .settings, title: "Settings", symbol: "gearshape.fill")]
+        return Array(apps.prefix(12 - own.count)) + own
     }
 
     static func symbol(harness name: String) -> String {

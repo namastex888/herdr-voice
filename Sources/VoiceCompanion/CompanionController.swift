@@ -48,10 +48,9 @@ import VoiceEngine
     let keys: CompanionKeys
     let chat = ChatModel()
     let registry: SkillRegistry
-    /// The phone's screen, shade and morph; the live levels its orb and light bar draw; the Mac's battery and network.
+    /// The phone's screen, drawer and morph; the live levels its orb and light bar draw.
     let phone = PhoneModel()
     let live = LiveLevels()
-    let device = DeviceStatus()
     @Published private(set) var tree: ConfigTree
     @Published private(set) var harnesses: [HarnessInfo] = []
     @Published private(set) var skills: [SkillInfo] = []
@@ -105,6 +104,10 @@ import VoiceEngine
     let player = VoiceNotePlayer()
     /// The day's numbers (`~/.vox/metrics.json`) the cockpit reads.
     let numbers: MetricsRecorder
+    /// The cockpit's "Running now": Herdr's agents, through the Herdr harness.
+    let agents: AgentsWatcher
+    /// Where the detail charts' days come from.
+    let history = CockpitHistory()
 
     /// `store` is where `config.json` lives; the first time it is built from 0.1.0's settings (`legacyDefaults`) and
     /// skills folder. nil keeps the configuration in memory. `gate` holds proposals until the human's own yes.
@@ -123,6 +126,13 @@ import VoiceEngine
         registry = SkillRegistry(store: store, factory: .companion(bridge, gate: gate), gate: gate,
                                  legacyDefaults: legacyDefaults)
         appBridge = bridge
+        let registry = registry
+        agents = AgentsWatcher(list: { registry.call("list_agents", arguments: "{}", userInitiated: true).output },
+                               focus: { target in
+                                   let args = (try? JSONSerialization.data(withJSONObject: ["target": target]))
+                                       .map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+                                   return registry.call("focus", arguments: args, userInitiated: true).output
+                               })
         tree = registry.tree
         reload()
         provider = chosenProvider()
@@ -132,6 +142,12 @@ import VoiceEngine
         numbers.provider = provider
         recorder.onTalk = { [weak self] side, seconds in self?.numbers.talk(side, seconds: seconds) }
         recorder.onConversation = { [weak self] in self?.numbers.conversationStarted() }
+        agents.onAgentTime = { [weak self] seconds in self?.numbers.agentTime(seconds) }
+        agents.onWorking = { [weak self] count in self?.numbers.agentsWorking(count) }
+        agents.watched = { [weak self] in
+            guard let self else { return false }
+            return self.phone.expanded && self.phone.screen == .home
+        }
         recorder.micAllowed = { [weak self] in
             guard let session = self?.session else { return true }
             return !session.muted && !session.paused
@@ -155,6 +171,23 @@ import VoiceEngine
     }
 
     var facts: [String] { (tree["memory"]?.config["facts"]?.array ?? []).compactMap(\.string) }
+
+    /// What she calls the user: `identity.userName`, else the first name of this Mac's account.
+    var userName: String {
+        let set = identity("userName").trimmingCharacters(in: .whitespaces)
+        if !set.isEmpty { return set }
+        return NSFullUserName().split(separator: " ").first.map(String.init) ?? NSUserName()
+    }
+
+    /// What the cockpit shows (`settings.dashboard`).
+    var dashboard: DashboardLayout { DashboardLayout(tree["settings"]?.config["dashboard"]) }
+
+    /// Shows or hides one cockpit item, as the user's own edit.
+    func setDashboard(_ change: DashboardLayout.Edit) {
+        let next = dashboard.applying(change)
+        guard next != dashboard else { return }
+        edit { try registry.setField("settings", "dashboard", next.json) }
+    }
 
     /// The voice named in the tree, else the provider's own (voice names differ per provider).
     var voice: String { settings.voice ?? provider.defaultVoice }
@@ -186,10 +219,10 @@ import VoiceEngine
 
     func start() {
         phone.theme = PhoneTheme(seed: accent)
-        let window = PhoneWindow(model: phone, content: PhoneRoot(controller: self, model: phone, live: live, device: device))
+        let window = PhoneWindow(model: phone, content: PhoneRoot(controller: self, model: phone, live: live))
         phoneWindow = window
         window.onFocusChange = { [weak self] in self?.updateEscape() }
-        device.start()
+        agents.start()
         watchFocusAndTouches()
         installStatusItem()
         window.showOrb()
