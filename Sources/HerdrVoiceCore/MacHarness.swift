@@ -3,7 +3,7 @@ import Foundation
 import os
 
 /// The Mac itself, through its stock command-line tools (`open`, `osascript`, `pbcopy`, `shortcuts`, `pmset`), so it
-/// needs no Accessibility permission. The developer's words reach those tools only as argv entries, never through a
+/// needs no Accessibility permission. The user's words reach those tools only as argv entries, never through a
 /// shell, and any that go into AppleScript are escaped string literals.
 public struct MacHarness: Harness {
     /// Runs `executable` with `arguments`, feeding `stdin` when given. Returns the exit status and stdout+stderr.
@@ -51,7 +51,7 @@ public struct MacHarness: Harness {
 
     // MARK: schemas
 
-    static let askAgain = "If it answers CONFIRMATION REQUIRED, ask the developer and call again with confirmed=true after they say yes."
+    static let askAgain = "If it answers CONFIRMATION REQUIRED, ask the user and call again with confirmed=true after they say yes."
 
     nonisolated(unsafe) static let schemas: [[String: Any]] = {
         let fn = HerdrTools.fn, str = HerdrTools.str, confirmed = HerdrTools.confirmedField
@@ -81,8 +81,8 @@ public struct MacHarness: Harness {
                ["text": str("The text to copy")], ["text"]),
             fn("notify", "Show a notification on the Mac's screen.",
                ["title": str("Short title"), "message": str("The notification text")], ["title", "message"]),
-            fn("list_shortcuts", "List the developer's shortcuts from the Shortcuts app, by name.", [:], []),
-            fn("run_shortcut", "Run one of the developer's shortcuts by name, optionally with text input, and get its output "
+            fn("list_shortcuts", "List the user's shortcuts from the Shortcuts app, by name.", [:], []),
+            fn("run_shortcut", "Run one of the user's shortcuts by name, optionally with text input, and get its output "
                + "(15 s limit). " + askAgain,
                ["name": str("The shortcut's name as list_shortcuts shows it"), "input": str("Text to pass in, if it takes input"),
                 "confirmed": confirmed],
@@ -96,7 +96,7 @@ public struct MacHarness: Harness {
     nonisolated(unsafe) static let appleScriptSchema = HerdrTools.fn(
         "run_applescript",
         "Run a short AppleScript on the Mac (15 s limit) and get its result, for Mac tasks the other tools don't cover. "
-            + "Always two calls: call without confirmed, ask the developer, then call again with confirmed=true after they say yes.",
+            + "Always two calls: call without confirmed, ask the user, then call again with confirmed=true after they say yes.",
         ["script": HerdrTools.str("The exact AppleScript source"), "confirmed": HerdrTools.confirmedField],
         ["script"])
 
@@ -110,7 +110,7 @@ public struct MacHarness: Harness {
             (args[key] as? String).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
         }
         let confirmed = args["confirmed"] as? Bool ?? false
-        // A spoken yes, needed only when the model acts on a report rather than on the developer's words.
+        // A spoken yes, needed only when the model acts on a report rather than on the user's words.
         func ask(_ action: String, _ question: String) -> String? {
             userInitiated ? nil
                 : HerdrTools.confirmStep(tool, action: "\(tool):\(action)", question: question, confirmed: confirmed, gate)
@@ -280,7 +280,7 @@ public struct MacHarness: Harness {
         "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 
-    /// The running app the developer named: same name ignoring case and accents, else the only one containing it.
+    /// The running app the user named: same name ignoring case and accents, else the only one containing it.
     static func match(_ name: String, in apps: [RunningApp]) -> RunningApp? {
         let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
         if let hit = apps.first(where: { $0.name.compare(name, options: options) == .orderedSame }) { return hit }

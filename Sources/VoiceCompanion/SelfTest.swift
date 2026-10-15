@@ -52,3 +52,15 @@ import HerdrVoiceCore
     print(failures == 0 ? "all checks passed" : "\(failures) check(s) failed")
     return failures == 0 ? 0 : 1
 }
+
+/// `VoiceCompanion --dump-tools <file>`: writes every tool the registry offers, as the wires send them, so the schemas
+/// can be checked against a provider without starting a session.
+@MainActor func dumpTools(to path: String) -> Int32 {
+    let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("vc-dump-\(UUID().uuidString)")
+    let registry = CompanionController(store: SkillStore(directory: scratch)).registry
+    let tools = registry.tools.definitions
+    guard let data = try? JSONSerialization.data(withJSONObject: tools, options: [.sortedKeys]),
+          (try? data.write(to: URL(fileURLWithPath: path))) != nil else { return 1 }
+    print("wrote \(tools.count) tools to \(path)")
+    return 0
+}
