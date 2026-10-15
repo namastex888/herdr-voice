@@ -51,7 +51,7 @@ enum CompanionTab: String, CaseIterable, Identifiable {
 struct CompanionView: View {
     @ObservedObject var controller: CompanionController
     @ObservedObject var chat: ChatModel
-    @ObservedObject var settings: CompanionSettings
+    @ObservedObject var keys: CompanionKeys
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,7 +60,7 @@ struct CompanionView: View {
             switch controller.tab {
             case .chat: ChatView(controller: controller, chat: chat)
             case .skills: SkillsView(controller: controller, chat: chat)
-            case .settings: SettingsView(controller: controller, settings: settings)
+            case .settings: SettingsView(controller: controller, keys: keys)
             }
         }
         .frame(minWidth: 340, minHeight: 420)
@@ -70,7 +70,10 @@ struct CompanionView: View {
         HStack(spacing: 10) {
             Circle().fill(chat.connected ? Color.green : Color.secondary.opacity(0.5)).frame(width: 8, height: 8)
                 .help(chat.connected ? "Connected" : "Not connected; it opens when you speak or type")
-            Text(chat.provider.menuTitle).font(.callout).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(controller.name).font(.headline).lineLimit(1)
+                Text(chat.provider.menuTitle).font(.caption).foregroundStyle(.secondary)
+            }
             Spacer()
             Picker("", selection: $controller.tab) {
                 ForEach(CompanionTab.allCases) { Text($0.rawValue).tag($0) }
@@ -101,8 +104,9 @@ private struct ChatView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         if chat.lines.isEmpty {
-                            Text("Talk any time, or type below. Try “open Safari”, “set the volume to 30”, or “learn a skill called "
-                                 + "start my day that opens Mail and Calendar”.")
+                            Text("Talk any time, or type below. \(controller.name) is new here: give a first task (“open Safari”, "
+                                 + "“set the volume to 30”) or teach one (“when I say start my day, open Mail and Calendar”). "
+                                 + "Nothing about her changes without your yes.")
                                 .font(.callout).foregroundStyle(.secondary).padding(.top, 24)
                         }
                         ForEach(chat.lines) { LineView(line: $0).id($0.id) }
@@ -115,7 +119,7 @@ private struct ChatView: View {
             }
             Divider()
             HStack(spacing: 8) {
-                TextField("Type to Voice Companion…", text: $draft, axis: .vertical)
+                TextField("Type to \(controller.name)…", text: $draft, axis: .vertical)
                     .textFieldStyle(.plain).lineLimit(1...4).focused($typing).onSubmit(send)
                 Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.title2) }
                     .buttonStyle(.borderless).disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -168,6 +172,12 @@ private struct LineView: View {
         case .result:
             Label(line.text, systemImage: "checkmark.circle").font(.caption.monospaced()).foregroundStyle(.tertiary)
                 .lineLimit(4).textSelection(.enabled)
+        case .ask:
+            Label(line.text, systemImage: "questionmark.circle.fill").font(.callout).foregroundStyle(.orange)
+                .textSelection(.enabled)
+        case .change:
+            Label(line.text, systemImage: "sparkles").font(.callout).foregroundStyle(.green)
+                .textSelection(.enabled)
         case .note:
             Text(line.text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
         }
@@ -177,136 +187,5 @@ private struct LineView: View {
         Text(line.text).textSelection(.enabled)
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(RoundedRectangle(cornerRadius: 12).fill(color))
-    }
-}
-
-// MARK: skills: every harness action, and what each skill uses
-
-private struct SkillsView: View {
-    @ObservedObject var controller: CompanionController
-    @ObservedObject var chat: ChatModel
-
-    var body: some View {
-        List {
-            Section("Learned skills") {
-                if controller.skills.isEmpty {
-                    Text("None yet. Teach one by voice or in the chat: “learn a skill called start my day that opens Mail "
-                         + "and Calendar and sets the volume to 30”.")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                ForEach(controller.skills) { skill in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(skill.title).font(.headline)
-                            Spacer()
-                            Button(role: .destructive) { controller.deleteLearned(skill.id) } label: { Image(systemName: "trash") }
-                                .buttonStyle(.borderless).help("Forget this skill")
-                        }
-                        Text(skill.summary).font(.callout).foregroundStyle(.secondary)
-                        ForEach(Array(skill.steps.enumerated()), id: \.offset) { index, step in
-                            Text("\(index + 1). \(step.action) \(step.arguments == "{}" ? "" : step.arguments)")
-                                .font(.caption.monospaced()).foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-            }
-            ForEach(controller.harnesses) { harness in
-                Section {
-                    if !harness.available {
-                        Text(harness.unavailableReason).font(.callout).foregroundStyle(.secondary)
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        if chat.activeSkills.contains(harness.id) {
-                            Text("loaded").font(.caption2).foregroundStyle(.green)
-                        }
-                        FlowText(items: harness.actions.map { ($0.name, $0.description) })
-                    }
-                    .padding(.vertical, 2)
-                } header: {
-                    Text("\(harness.title) · \(harness.actions.count) actions")
-                }
-            }
-        }
-    }
-}
-
-/// Action names as small chips, each explaining itself on hover.
-private struct FlowText: View {
-    let items: [(name: String, description: String)]
-
-    var body: some View {
-        Text(items.map(\.name).joined(separator: "  ·  "))
-            .font(.caption.monospaced()).foregroundStyle(.secondary)
-            .help(items.map { "\($0.name): \($0.description)" }.joined(separator: "\n"))
-    }
-}
-
-// MARK: settings
-
-private struct SettingsView: View {
-    @ObservedObject var controller: CompanionController
-    @ObservedObject var settings: CompanionSettings
-    @State private var keyDrafts: [Provider: String] = [:]
-    @State private var jevDraft = ""
-    @State private var message = ""
-
-    var body: some View {
-        Form {
-            Section("Voice") {
-                Picker("Model", selection: Binding(get: { settings.provider }, set: { controller.switchProvider(to: $0) })) {
-                    ForEach(CompanionSettings.providers, id: \.self) { provider in
-                        Text(provider.menuTitle + (settings.hasKey(provider) ? "" : " (no key)")).tag(provider)
-                    }
-                }
-            }
-            Section("API keys (stored in your Keychain)") {
-                ForEach(CompanionSettings.providers, id: \.self) { provider in
-                    HStack {
-                        SecureField("\(provider.menuTitle) key\(settings.hasKey(provider) ? " (saved)" : "")",
-                                    text: Binding(get: { keyDrafts[provider] ?? "" }, set: { keyDrafts[provider] = $0 }))
-                        Button("Save") {
-                            message = settings.saveKey(keyDrafts[provider] ?? "", for: provider)
-                                ? "Saved the \(provider.menuTitle) key." : "That doesn't look like a key."
-                            keyDrafts[provider] = ""
-                        }
-                        .disabled((keyDrafts[provider] ?? "").isEmpty)
-                    }
-                }
-            }
-            Section("Skill routing") {
-                Toggle("Route each turn with Jev", isOn: $settings.routeWithJev)
-                HStack {
-                    SecureField("Jev (TypeSafe) key\(settings.jevKey != nil ? " (saved)" : "")", text: $jevDraft)
-                    Button("Save") {
-                        message = settings.saveJevKey(jevDraft) ? "Saved the Jev key." : "That doesn't look like a key."
-                        jevDraft = ""
-                        controller.refreshRouter()
-                    }
-                    .disabled(jevDraft.isEmpty)
-                }
-                Button("Use MeetingPulse's Jev key") {
-                    message = settings.importJevKeyFromMeetingPulse() ? "Imported the Jev key." : "No MeetingPulse key found."
-                    controller.refreshRouter()
-                }
-                TextField("Jev model", text: $settings.jevModel).onSubmit { controller.refreshRouter() }
-                Text(settings.jevRouter == nil ? "Routing by words until Jev has a key." : "Routing with \(settings.jevModel).")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Powerful controls") {
-                Toggle("AppleScript (each script needs your spoken yes)",
-                       isOn: Binding(get: { controller.appleScriptOn }, set: { controller.setAppleScript($0) }))
-                Toggle("Shell commands (each command needs your spoken yes)",
-                       isOn: Binding(get: { controller.shellOn }, set: { controller.setShell($0) }))
-                HStack {
-                    Button("Restart now") { controller.restart() }
-                    Button("Open skills folder") { controller.openSkillsFolder() }
-                }
-            }
-            if !message.isEmpty {
-                Text(message).font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
     }
 }
