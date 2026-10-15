@@ -191,7 +191,7 @@ if env["HERDR_ENV"] != "1" {
 }
 
 if env["HERDR_VOICE_ECHO_CANCEL"] == "0" { log("echo cancellation off (HERDR_VOICE_ECHO_CANCEL=0): use headphones") }
-if HerdrTools.shellEnabled { log("⚠ run_shell is enabled: every command still needs your spoken yes") }
+if HerdrTools.shellEnabled { log("⚠ run_shell is enabled: read-only checks run at once, anything that changes something needs your spoken yes") }
 let startedWith = provider
 let session = Realtime(provider: provider, key: key,
                        voice: provider.voice(startedWith: startedWith, configured: env["HERDR_VOICE_VOICE"]))

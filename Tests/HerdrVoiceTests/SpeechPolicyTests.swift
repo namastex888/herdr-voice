@@ -2,8 +2,8 @@ import Testing
 @testable import HerdrVoiceCore
 
 /// Streams `text` in small chunks, like transcript deltas, and returns the first non-ok verdict.
-private func stream(_ text: String, allowCode: Bool = false) -> SpeechPolicy.Verdict {
-    var policy = SpeechPolicy(allowCode: allowCode)
+private func stream(_ text: String) -> SpeechPolicy.Verdict {
+    var policy = SpeechPolicy()
     var i = text.startIndex
     while i < text.endIndex {
         let j = text.index(i, offsetBy: 3, limitedBy: text.endIndex) ?? text.endIndex
@@ -49,8 +49,9 @@ func shortSummariesPass(text: String) { #expect(stream(text) == .ok) }
 ])
 func leaksAreCaught(text: String, reason: String) { #expect(stream(text) == .leak(reason)) }
 
-@Test func runShellApprovalsMayReadTheCommand() {
-    #expect(stream("Run cat ~/dev/app/notes.md?", allowCode: true) == .ok)
+@Test func approvalQuestionsAreHeldToPlainWordsToo() {
+    #expect(stream("Run cat ~/dev/app/notes.md?") != .ok)
+    #expect(stream("Can I delete the three old log files in the forge project?") == .ok)
 }
 
 @Test func aVerdictFiresOncePerReply() {

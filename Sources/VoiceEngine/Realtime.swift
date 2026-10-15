@@ -1007,8 +1007,7 @@ import os
             micShared.withLock { $0.midTurn = false }
             awaitingReplySince = nil
             droppingAudio = false
-            // A run_shell approval question reads the command aloud on purpose.
-            policy = SpeechPolicy(allowCode: ConfirmGate.shared.pendingAction?.hasPrefix("run_shell") == true)
+            policy = SpeechPolicy()
         case .assistantTranscriptDelta(let delta):
             enforce(policy.feed(delta))
         case .assistantTranscript(let t):

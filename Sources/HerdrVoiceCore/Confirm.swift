@@ -97,7 +97,8 @@ extension HerdrTools {
             }
             return "CONFIRMATION REQUIRED. Nothing was done yet. Ask the developer, in one short sentence: \(question)? "
                 + "Then stop and wait for their spoken answer. Only after they say yes, call \(tool) again with the same "
-                + "arguments and confirmed=true."
+                + "arguments and confirmed=true. Say it in plain, everyday words: what will happen and what it changes, "
+                + "never a command, file path, ID or code."
         }
         // Small models tend to report a refused action as done, so the refusal says so bluntly.
         guard gate.consume(action) else {
