@@ -33,11 +33,9 @@ public enum WireCommand: Sendable {
     case truncate(itemID: String, audioEndMs: Int)
     /// Sent right after `setup` by a session that takes its own turns (only where `capabilities.deferredReplies`):
     /// `true` keeps the provider from answering a finished spoken turn by itself, so the reply waits for
-    /// `requestReply`; `false` goes back to the provider answering on its own (what `setup` sets up).
+    /// `requestReply`; `false` goes back to the provider answering on its own (what `setup` sets up). The provider's
+    /// speech detection still ends each turn either way.
     case deferReplies(Bool)
-    /// Ends the spoken turn now: what was appended becomes the user's turn (only where `capabilities.manualTurns`;
-    /// elsewhere the provider's own speech detection ends it).
-    case commitInput
 }
 
 public struct ToolOutput: Equatable, Sendable {
@@ -80,12 +78,10 @@ public struct WireCapabilities: Equatable, Sendable {
     public var setupHandshake = false
     /// Use is billed, so a session nobody has talked to for a while is closed, and reopened when you next speak.
     public var metered = true
-    /// The provider can hold the reply to a spoken turn until the session asks for it (`deferReplies`), so the
-    /// session decides when a turn is over. Off by default: a session that doesn't ask behaves as before.
+    /// The provider can hold the reply to a spoken turn until the session asks for it (`deferReplies`), while its own
+    /// speech detection still ends the turn, so the session decides when to answer. Off by default: a session that
+    /// doesn't ask behaves as before.
     public var deferredReplies = false
-    /// While replies are deferred the provider detects no speech either: the session's speech gate marks where
-    /// speech starts and stops, and `commitInput` ends each turn.
-    public var manualTurns = false
     /// The provider can drop what it buffered of the user's speech (`clearInput`), so a mute leaves nothing of it to
     /// answer. Without it (Gemini) nothing is sent: the only way to stop its input, end of stream, answers what it
     /// heard.
@@ -111,7 +107,6 @@ public extension WireCapabilities {
         "setupHandshake": "the session is up only once the setup is acknowledged (sessionReady)",
         "metered": "billed by use, so a quiet session is closed until you speak",
         "deferredReplies": "the session can hold the reply to a spoken turn until it asks for one (deferReplies)",
-        "manualTurns": "with replies deferred, the session's gate marks speech and commits each turn itself",
         "clearsInput": "a mute drops what the provider buffered of your speech; otherwise the mic just stops",
     ]
 }

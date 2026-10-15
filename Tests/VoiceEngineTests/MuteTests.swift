@@ -130,14 +130,17 @@ import Testing
     }
 
     /// Listening, the cooldown and the follow-up window all have the session up and the mic on: muting in any of
-    /// them sends nothing, and the turn the cooldown submits commits nothing.
-    @Test func mutedConversationSendsAndCommitsNothing() async {
-        let rig = tapToTalk(.grok)
+    /// them sends nothing, and the turn the cooldown submits asks for no reply. (OpenAI: the provider with a cooldown.)
+    @Test func mutedConversationSendsAndAsksNothing() async {
+        let rig = tapToTalk(.openai)
         rig.session.listen()
         await rig.serverUp()
+        await rig.serverSays(#"{"type":"response.created"}"#) // the greeting
+        await rig.serverSays(#"{"type":"response.done"}"#)
         await rig.say("turn") // listening → speech stops → cooldown
+        let turn = rig.mark
         rig.session.submitTurn()
-        #expect(rig.types(since: 0).contains("input_audio_buffer.commit"), "an unmuted turn is committed")
+        #expect(rig.types(since: turn).contains("response.create"), "an unmuted turn is answered")
         await rig.serverSays(#"{"type":"response.created"}"#)
         await rig.serverSays(#"{"type":"response.done"}"#) // her reply is over: the follow-up window
 

@@ -157,7 +157,34 @@ private func run(_ machine: inout TurnTaking, _ steps: [(TurnTaking.Event, TimeI
     var m = TurnTaking()
     #expect(m.handle(.assistant(busy: true), at: at(0)) == [.open])
     _ = m.handle(.assistant(busy: false), at: at(4))
-    #expect(m.phase == .followUp(since: at(4), until: at(12)))
+    #expect(m.phase == .followUp(since: at(4), until: at(24)))
+}
+
+@Test func theFollowUpWindowIsTwentySecondsByDefault() {
+    #expect(TurnTaking.Timing().followUp == 20)
+    var m = TurnTaking()
+    _ = run(&m, [(.tap, 0), (.speechStarted, 0.5), (.speechStopped, 2), (.tick, 2.5),
+                 (.assistant(busy: true), 3), (.assistant(busy: false), 6)])
+    #expect(m.phase == .followUp(since: at(6), until: at(26)))
+    #expect(run(&m, [(.tick, 25.9)]).isEmpty)
+    #expect(run(&m, [(.tick, 26)]) == [.close])
+}
+
+/// Whoever speaks in the window, it starts over from the end of what they said: you (your turn and her answer to it),
+/// or she (an agent report she reads out).
+@Test func theFollowUpWindowStartsOverWheneverEitherSideSpeaks() {
+    var m = TurnTaking()
+    _ = run(&m, [(.tap, 0), (.speechStarted, 0.5), (.speechStopped, 2), (.tick, 2.5),
+                 (.assistant(busy: true), 3), (.assistant(busy: false), 6)])
+    // You speak 15 s in: the window is held while you talk and she answers, then runs its full 20 s again.
+    _ = run(&m, [(.speechStarted, 21), (.speechStopped, 23), (.tick, 23.5), (.assistant(busy: true), 24),
+                 (.tick, 26), (.assistant(busy: false), 27)])
+    #expect(m.phase == .followUp(since: at(27), until: at(47)))
+    // She speaks up 10 s later: the same.
+    _ = run(&m, [(.assistant(busy: true), 37), (.tick, 50), (.assistant(busy: false), 52)])
+    #expect(m.phase == .followUp(since: at(52), until: at(72)))
+    #expect(run(&m, [(.tick, 71.9)]).isEmpty)
+    #expect(run(&m, [(.tick, 72)]) == [.close])
 }
 
 @Test func aResetForgetsTheTurnQuietly() {

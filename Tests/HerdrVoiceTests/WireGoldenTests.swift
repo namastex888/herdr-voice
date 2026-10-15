@@ -76,12 +76,13 @@ func commandGoldens(provider: Provider) {
     for (command, expected) in cases {
         #expect(wire.encode(command).map(json) == expected.map(json), "\(command)")
     }
-    // The two flags that only a session opting in uses (deferred replies) are the one difference between them.
+    // Deferred replies, which only a session opting in uses, are the one difference between them: xAI can't hold a
+    // reply without turning its speech detection off, so it answers every turn by itself, as in 0.2.
     #expect(wire.capabilities == WireCapabilities(explicitReplies: true, nativeResumption: false, dynamicTools: true,
-                                                  deferredReplies: true, manualTurns: provider == .grok))
+                                                  deferredReplies: provider == .openai))
 }
 
-@Test("deferring replies: OpenAI keeps its VAD without answering; xAI hands the turns to the session")
+@Test("deferring replies: OpenAI keeps its VAD without answering; xAI keeps answering by itself")
 func deferredReplies() {
     let openai = OpenAIRealtimeWire(provider: .openai), grok = OpenAIRealtimeWire(provider: .grok)
     let held: [String: Any] = ["type": "session.update", "session": ["type": "realtime", "audio": ["input": [
@@ -90,12 +91,8 @@ func deferredReplies() {
         "turn_detection": ["type": "semantic_vad", "create_response": true, "interrupt_response": true]]]]]
     #expect(openai.encode(.deferReplies(true)).map(json) == [json(held)])
     #expect(openai.encode(.deferReplies(false)).map(json) == [json(answering)])
-    #expect(openai.encode(.commitInput).isEmpty) // its VAD commits each turn
-    #expect(grok.encode(.deferReplies(true)).map(json)
-            == [json(["type": "session.update", "session": ["turn_detection": NSNull()]])])
-    #expect(grok.encode(.deferReplies(false)).map(json)
-            == [json(["type": "session.update", "session": ["turn_detection": ["type": "server_vad"]]])])
-    #expect(grok.encode(.commitInput).map(json) == [json(["type": "input_audio_buffer.commit"])])
+    // Grok's turn detection stays the server VAD its setup turns on (the setup golden above, unchanged since 0.2).
+    #expect(grok.encode(.deferReplies(true)).isEmpty && grok.encode(.deferReplies(false)).isEmpty)
     // Setting back to answering by itself is exactly what setup sets up.
     let setup = Provider.openai.sessionUpdate(instructions: "I", voice: "V")
     let setupDetection = ((setup["session"] as? [String: Any])?["audio"] as? [String: Any]).map { json($0) } ?? ""

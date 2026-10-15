@@ -190,7 +190,7 @@ public struct TurnTaking: Sendable {
         /// Two taps closer than this are a double tap.
         public var doubleTap: TimeInterval
 
-        public init(cooldown: TimeInterval = 0.5, followUp: TimeInterval = 8, listenTimeout: TimeInterval = 10,
+        public init(cooldown: TimeInterval = 0.5, followUp: TimeInterval = 20, listenTimeout: TimeInterval = 10,
                     replyTimeout: TimeInterval = 20, tapMax: TimeInterval = 0.8, doubleTap: TimeInterval = 0.4) {
             self.cooldown = cooldown
             self.followUp = followUp

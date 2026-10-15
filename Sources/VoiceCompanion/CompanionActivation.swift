@@ -3,8 +3,9 @@ import HerdrVoiceCore
 import VoiceEngine
 
 /// When she listens. Tap-to-talk and the wake word keep the session closed and the mic on standby between
-/// conversations, so nothing is billed: a tap (or the wake phrase) opens one, the provider's speech detection (or
-/// the session's gate) says when you stopped, a short cooldown lets you go on, and the reply is asked for. After it,
+/// conversations, so nothing is billed: a tap (or the wake phrase) opens one, the provider's speech detection (once
+/// the mic's speech sensor agrees it's you) says when you stopped, a short cooldown lets you go on (where the provider
+/// can hold the reply), and the reply is asked for. After it,
 /// the follow-up window lets you talk without the key; when it runs out the session closes again. `TurnTaking`
 /// decides all of it; this file feeds it events and the clock and does what it says.
 extension CompanionController {
@@ -18,7 +19,7 @@ extension CompanionController {
     func applyActivation() {
         let mode = activationMode, settings = settings
         let holdsReplies = (session?.provider ?? provider).capabilities.deferredReplies
-        turns.timing.cooldown = holdsReplies ? Self.cooldown : 0 // Gemini answers when you stop; nothing to hold
+        turns.timing.cooldown = holdsReplies ? Self.cooldown : 0 // Grok and Gemini answer when you stop
         turns.timing.followUp = settings.followUpSeconds
         session?.deferReplies = mode.opensOnRequest
         var notes: [String] = []

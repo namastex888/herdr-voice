@@ -207,7 +207,7 @@ func request(_ plan: Plan, key: String) -> URLRequest {
                     guard echoed == nil || echoed is NSNull else {
                         return fail("turn detection is still on: \(compact(echoed))")
                     }
-                    detail += ", turn detection off (the session commits turns)"
+                    detail += ", turn detection off"
                 } else if let sent = sent as? [String: Any] {
                     guard let echoed = echoed as? [String: Any] else { return fail("no turn_detection in the echo") }
                     // Every field sent must come back as sent; a field dropped from the echo isn't honoured.

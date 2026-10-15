@@ -40,7 +40,8 @@ func contractPlanUsesTheRealWire() throws {
     // The turn-detection steps carry what they send, so the probe can check the provider kept it.
     #expect((steps[3]["turnDetection"] as? [String: Any])?["create_response"] as? Bool == false)
     let grok = try #require(ProviderContract.plan(for: .grok, tools: tools, environment: [:])["steps"] as? [[String: Any]])
-    #expect(grok[3]["turnDetection"] is NSNull && (grok[4]["turnDetection"] as? [String: Any])?["type"] as? String == "server_vad")
+    // Grok can't hold a reply without turning its VAD off, so it never defers: both steps send nothing (n/a).
+    #expect(grok[3...4].allSatisfy { ($0["messages"] as? [[String: Any]])?.isEmpty == true })
     let setup = try #require((steps[0]["messages"] as? [[String: Any]])?.first)
     #expect(NSDictionary(dictionary: setup) == NSDictionary(dictionary: Provider.openai.sessionUpdate(
         instructions: voiceInstructions, voice: Provider.openai.defaultVoice, tools: tools)))

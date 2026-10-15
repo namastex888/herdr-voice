@@ -163,6 +163,9 @@ public final class Audio: @unchecked Sendable {
         let wasSpeaking = playback.isSpeaking
         playback.enqueue(item: item, frames: frames)
         if !wasSpeaking { onSpeakingChanged?(true) }
+        // A player outside an engine raises on scheduleBuffer: a session that was never started (VoiceEngineTests)
+        // only keeps the ledger, so it is speaking until interrupted.
+        guard player.engine != nil else { return }
         let gen = generation
         // @Sendable: called on an audio thread, so it must not inherit this method's main-actor isolation.
         player.scheduleBuffer(buf, completionCallbackType: .dataPlayedBack) { @Sendable [weak self] _ in

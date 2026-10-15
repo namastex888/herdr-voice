@@ -88,7 +88,7 @@ struct CompanionSettings: Equatable {
         jevModel = config["jevModel"]?.string.flatMap { $0.isEmpty ? nil : $0 } ?? JevRouter.defaultModel
         activation = config["activation"]?.string.flatMap(ActivationMode.init(rawValue:)) ?? .default
         activationKey = config["activationKey"]?.string.flatMap(ActivationKey.init(rawValue:)) ?? .default
-        followUpSeconds = min(max(config["followUpSeconds"]?.number ?? 8, Self.followUpRange.lowerBound),
+        followUpSeconds = min(max(config["followUpSeconds"]?.number ?? 20, Self.followUpRange.lowerBound),
                               Self.followUpRange.upperBound)
         wakePhrase = config["wakePhrase"]?.string.flatMap {
             $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0.trimmingCharacters(in: .whitespaces)

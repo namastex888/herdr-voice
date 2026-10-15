@@ -9,11 +9,12 @@ public final class OpenAIRealtimeWire: Wire, Sendable {
         self.provider = provider
     }
 
-    /// Both can hold a turn's reply. OpenAI keeps its speech detection with `create_response: false`; xAI documents
-    /// no such switch, only turning detection off (`turn_detection: null`), so there the session takes the turns.
+    /// OpenAI can hold a turn's reply and keep its speech detection (`create_response: false`). xAI documents no
+    /// such switch, only turning detection off, which leaves the session to guess where turns end from the mic: its
+    /// server VAD ends and answers every turn, as Gemini's does.
     public var capabilities: WireCapabilities {
-        WireCapabilities(explicitReplies: true, nativeResumption: false, dynamicTools: true, deferredReplies: true,
-                         manualTurns: provider == .grok)
+        WireCapabilities(explicitReplies: true, nativeResumption: false, dynamicTools: true,
+                         deferredReplies: provider == .openai)
     }
 
     public func encode(_ command: WireCommand) -> [[String: Any]] {
@@ -50,9 +51,7 @@ public final class OpenAIRealtimeWire: Wire, Sendable {
         case let .truncate(itemID, audioEndMs):
             return [["type": "conversation.item.truncate", "item_id": itemID, "content_index": 0, "audio_end_ms": audioEndMs]]
         case .deferReplies(let on):
-            return [provider.turnDetectionUpdate(deferReplies: on)]
-        case .commitInput:
-            return capabilities.manualTurns ? [["type": "input_audio_buffer.commit"]] : []
+            return capabilities.deferredReplies ? [provider.turnDetectionUpdate(deferReplies: on)] : []
         }
     }
 

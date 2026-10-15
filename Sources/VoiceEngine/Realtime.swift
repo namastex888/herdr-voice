@@ -61,9 +61,9 @@ import os
     public private(set) var standby = false { didSet { syncSendGate() } }
     /// Nothing from the mic reaches a session: off, or on standby. Voice processing is bypassed meanwhile.
     private var micIdle: Bool { micOff || standby }
-    /// The companion's tap-to-talk: the session, not the provider, decides when a spoken turn is over
-    /// (`submitTurn`), where the provider allows it (`capabilities.deferredReplies`); elsewhere (Gemini, Local) the
-    /// provider answers each turn as before. Sent right after every setup, and at once when changed mid-session.
+    /// The companion's tap-to-talk: the session, not the provider, decides when to answer a spoken turn
+    /// (`submitTurn`), where the provider allows it (`capabilities.deferredReplies`); elsewhere (Grok, Gemini, Local)
+    /// the provider answers each turn as before. Sent right after every setup, and at once when changed mid-session.
     public var deferReplies = false {
         didSet {
             guard deferReplies != oldValue else { return }
@@ -78,12 +78,11 @@ import os
     private var audioStarted = false
     /// Replies to spoken turns wait for `submitTurn`.
     private var deferring: Bool { deferReplies && capabilities.deferredReplies }
-    /// Deferring where the provider then detects no speech (xAI): the gate marks speech, and turns are committed here.
-    private var localTurns: Bool { deferring && capabilities.manualTurns }
     /// A turn submitted before its session was up, sent once it is (right after the speech held meanwhile).
     private var submitWhenUp = false
-    /// Speech started (true) or stopped (false), as the session sees it: the provider's speech detection, or the gate
-    /// where the session marks speech itself. The companion's tap-to-talk times its cooldown from it.
+    /// You started (true) or stopped (false) talking, as the session sees it: the provider's speech detection once the
+    /// mic's speech sensor agrees (see `confirmSpeech`), or the gate where the session marks speech itself. Noise and
+    /// her own echo never raise it. The companion's tap-to-talk times its cooldown and follow-up from it.
     public var onSpeech: ((Bool) -> Void)?
     /// Tool calls made after an agent report but before the developer speaks again are not user-initiated.
     private var lastSpeechStart = Date.distantPast
@@ -104,6 +103,13 @@ import os
     /// Whether the developer's latest speech began while the assistant was audible. A "yes" like that can be the
     /// assistant's own voice leaking into the mic, so it must not confirm anything.
     private var speechOverlappedPlayback = false
+    /// The provider heard speech start and not yet stop: when, and whether the mic's speech sensor confirmed it
+    /// (`counted`). Until then it is taken for noise or her echo.
+    private var providerSpeech: (since: Date, counted: Bool)?
+    /// The mic's speech sensor hears someone talking now.
+    private var micHearsSpeech = false
+    /// The provider took your turn for over while the sensor still heard you: it ends when the sensor hears you stop.
+    private var speechEndPending = false
     /// Set when the developer stops talking, until the reply starts; expires in case no reply comes.
     private var awaitingReplySince: Date?
     private var toolsRunning = 0
@@ -152,7 +158,8 @@ import os
     private nonisolated let gated = ProcessInfo.processInfo.environment["HERDR_VOICE_STREAM"] != "always"
     /// A session with no speech for this long, and nothing speaking or running, is closed until you speak.
     nonisolated static let quietClose: TimeInterval = 180
-    /// How recent the mic's own loud onset must be for the provider's "speech started" to cut the voice off.
+    /// How long the provider's "speech started" waits for the mic's speech sensor to agree before it is taken for
+    /// noise or echo.
     nonisolated static let bargeInWindow: TimeInterval = 1.5
     /// HERDR_VOICE_GATE_DEBUG=1: log gate openings/closings and a level meter every 5 s, to tune any mic.
     private nonisolated let gateDebug = ProcessInfo.processInfo.environment["HERDR_VOICE_GATE_DEBUG"] == "1"
@@ -163,6 +170,8 @@ import os
         /// HERDR_VOICE_GATE_THRESHOLD pins the opening level for unusual hardware.
         var gate = SpeechGate<String>(
             overrideThreshold: ProcessInfo.processInfo.environment["HERDR_VOICE_GATE_THRESHOLD"].flatMap(Float.init))
+        /// Tells speech from noise for barge-in and turn-taking.
+        var sensor: any SpeechSensor
         var echoReference: Float = 0
         var meterPeak: Float = 0
         var meterChunks = 0
@@ -184,14 +193,13 @@ import os
             return lines
         }
     }
-    private nonisolated let micLocal = OSAllocatedUnfairLock(initialState: MicLocal())
+    private nonisolated let micLocal: OSAllocatedUnfairLock<MicLocal>
     /// Where the mic queue streams to: the current connection's wire and socket, read together under `micShared`.
     private struct MicLink {
         let wire: Wire
         let socket: (any SessionSocket)?
         let connection: Int
         let onsets: Bool
-        let localTurns: Bool
     }
     /// Shared between the mic queue and main.
     private struct MicShared {
@@ -199,12 +207,8 @@ import os
         var muted = false
         /// The provider detects no speech (`explicitSpeechOnsets`): the gate marks utterances and speech events.
         var onsets = false
-        /// Replies are deferred and the provider detects no speech (`localTurns`): the gate reports speech events.
-        var localTurns = false
         /// On standby: the gate keeps learning, but nothing is sent, held or reopens a session.
         var standby = false
-        /// Audio went out since the last commit, so a manual turn has something to commit.
-        var uncommitted = false
         var mayStream = false
         /// The provider has heard speech start and not yet end: keep streaming so it sees the turn finish.
         var midTurn = false
@@ -216,11 +220,9 @@ import os
         var wire: Wire?
         var socket: (any SessionSocket)?
         var connection = 0
-        /// The last time the mic heard a speech-loud chunk (above the gate's opening level).
-        var lastLoud = Date.distantPast
 
         var link: MicLink? {
-            wire.map { MicLink(wire: $0, socket: socket, connection: connection, onsets: onsets, localTurns: localTurns) }
+            wire.map { MicLink(wire: $0, socket: socket, connection: connection, onsets: onsets) }
         }
     }
     private nonisolated let micShared = OSAllocatedUnfairLock(initialState: MicShared())
@@ -239,9 +241,11 @@ import os
     public init(provider: Provider, key: String, voice: String, request: URLRequest? = nil,
                 host: ToolHost = HerdrToolHost(), instructions: String = voiceInstructions,
                 greeting: String = Greeting.prompt,
+                speechSensor: any SpeechSensor = LoudnessSensor(),
                 socket makeSocket: @escaping @MainActor (URLRequest) -> any SessionSocket = {
                     URLSession.shared.webSocketTask(with: $0)
                 }) {
+        self.micLocal = OSAllocatedUnfairLock(initialState: MicLocal(sensor: speechSensor))
         self.makeSocket = makeSocket
         self.provider = provider
         self.key = key
@@ -278,21 +282,16 @@ import os
         var useGate = false
         var opened = false
         var closed = false
-        /// Speech-loud: above the gate's opening level before this chunk moved it.
-        var loud = false
+        /// The speech sensor heard speech start (true) or stop (false) with this chunk.
+        var speech: Bool?
         var meterLines: [String] = []
     }
 
     /// On the mic queue, every 20 ms.
     private nonisolated func micChunk(_ b64: String, level: Float) {
-        // With explicit onsets the gate is the only speech detector: always on, echo-guarded, never held open by
-        // the provider, and its openings and closings are the utterance boundaries.
-        let (muted, midTurn, onsets, standby, localTurns) = micShared.withLock {
-            ($0.muted, $0.midTurn, $0.onsets, $0.standby, $0.localTurns)
-        }
-        // Where the gate marks speech for the session (explicit onsets, or manual turns), the provider can't hold it
-        // open, and the echo of the voice must not count as speech.
-        let selfMarked = onsets || localTurns
+        // With explicit onsets the gate is the only speech detector: always on, never held open by the provider, and
+        // its openings and closings are the utterance boundaries.
+        let (muted, midTurn, onsets, standby) = micShared.withLock { ($0.muted, $0.midTurn, $0.onsets, $0.standby) }
         let playback = audio.outLevel
         let gated = gated, gateDebug = gateDebug, echoRatio = echoRatio
         let gateStep = micLocal.withLock { m -> GateStep? in
@@ -303,26 +302,31 @@ import os
             }
             if muted {
                 m.gate.reset()
+                m.sensor.reset()
                 return nil
             }
             var step = GateStep()
             let wasOpen = m.gate.isOpen
+            // Her own voice leaking back into the mic is never you, whoever the provider: while she plays, input below
+            // `echoRatio` × her playback counts as the room's noise.
             m.echoReference = EchoGuard.reference(previous: m.echoReference, playback: playback)
-            let gateLevel = selfMarked ? EchoGuard.level(level, playback: m.echoReference, floor: m.gate.noiseFloor, ratio: echoRatio) : level
-            step.loud = gated && gateLevel > m.gate.openThreshold
-            step.useGate = gated || selfMarked
-            step.chunks = step.useGate ? m.gate.process(b64, level: gateLevel, holdOpen: selfMarked ? false : midTurn) : [b64]
+            let gateLevel = EchoGuard.level(level, playback: m.echoReference, floor: m.gate.noiseFloor, ratio: echoRatio)
+            let loud = gateLevel > m.gate.openThreshold
+            step.useGate = gated || onsets
+            step.chunks = step.useGate ? m.gate.process(b64, level: gateLevel, holdOpen: onsets ? false : midTurn) : [b64]
             step.opened = m.gate.isOpen && !wasOpen
             step.closed = wasOpen && !m.gate.isOpen
             if gateDebug && step.useGate {
                 step.meterLines = m.meter(level: level, playback: playback, opened: step.opened, closed: step.closed)
             }
             // On standby the gate has learned from this chunk; nothing goes anywhere.
-            return standby ? nil : step
+            if standby { return nil }
+            step.speech = m.sensor.hear(b64, aboveEcho: level >= m.echoReference * echoRatio, loud: loud)
+            return step
         }
         guard let gateStep else { return }
         for line in gateStep.meterLines { DispatchQueue.main.async { log(line) } }
-        if gateStep.loud { micShared.withLock { $0.lastLoud = Date() } }
+        if let speech = gateStep.speech { DispatchQueue.main.async { self.micHeardSpeech(speech) } }
         let chunks = gateStep.chunks, useGate = gateStep.useGate, opened = gateStep.opened, closed = gateStep.closed
         guard !chunks.isEmpty else { return }
         let stream = { [weak self] (link: MicLink) in
@@ -331,14 +335,15 @@ import os
             let send = { (command: WireCommand) in
                 if let socket = link.socket { self.transmit(link.wire.encode(command), on: socket, connection: link.connection) }
             }
-            if link.onsets && opened { send(.inputStarted(utteranceID: UUID().uuidString)) }
-            if (link.onsets || link.localTurns) && opened { DispatchQueue.main.async { self.handle(.speechStarted) } }
+            if link.onsets && opened {
+                send(.inputStarted(utteranceID: UUID().uuidString))
+                DispatchQueue.main.async { self.handle(.speechStarted) }
+            }
             chunks.forEach { send(.appendAudio($0)) }
-            if link.localTurns { self.micShared.withLock { $0.uncommitted = true } }
             // The gate just closed: tell the provider the stream paused (Gemini ends the turn on it).
             if closed {
                 send(.audioPaused)
-                if link.onsets || link.localTurns { DispatchQueue.main.async { self.handle(.speechStopped) } }
+                if link.onsets { DispatchQueue.main.async { self.handle(.speechStopped) } }
             }
         }
         if let link = micShared.withLock({ $0.mayStream ? $0.link : nil }) {
@@ -350,7 +355,7 @@ import os
         let held = micShared.withLock { state -> (link: MicLink?, onsets: Bool)? in
             if state.muted { return nil }
             if state.mayStream {
-                return (state.link, state.onsets || state.localTurns)
+                return (state.link, state.onsets)
             }
             if state.onsets {
                 state.held.appendLocal(chunks, opened: opened, closed: closed, utteranceID: UUID().uuidString)
@@ -358,7 +363,7 @@ import os
                 state.held.appendCloud(chunks, opened: opened, closed: closed)
             }
             state.lastSpeech = Date()
-            return (nil, state.onsets || state.localTurns)
+            return (nil, state.onsets)
         }
         guard let held else { return }
         if let link = held.link {
@@ -400,7 +405,6 @@ import os
                 frames += wire.encode(.inputStarted(utteranceID: id))
             }
             held.chunks.forEach { frames += wire.encode(.appendAudio($0)) }
-            if s.localTurns && !held.chunks.isEmpty { s.uncommitted = true }
             if held.closed { frames += wire.encode(.audioPaused) }
             // Sending the backlog and enabling live streaming under the same lock keeps new mic packets behind it.
             if let socket { self.transmit(frames, on: socket, connection: connection) }
@@ -440,6 +444,7 @@ import os
         awaitingCreated = false
         awaitingReplySince = nil
         micShared.withLock { $0.midTurn = false }
+        forgetSpeech()
         submitWhenUp = false
         let line = "💤 \(why); session closed until \(until ?? (paused ? "you resume" : "you speak"))"
         if quietly { log(line) } else { note(line) }
@@ -459,6 +464,7 @@ import os
             return relaunchLocalHelper()
         }
         micShared.withLock { $0.midTurn = false }
+        forgetSpeech()
         connection += 1
         established = false
         closeReason = nil
@@ -624,20 +630,16 @@ import os
 
     /// The mic queue reads these two under `micShared`: whether the mic is off, and whether it may stream now.
     private func syncSendGate() {
-        let off = micOff, standby = standby, localTurns = localTurns
+        let off = micOff, standby = standby
         // While buffering nothing streams, even to a session that happens to be up: the press may be ⌘C.
         let allowed = !off && !standby && !buffering && status == .live && established
         micShared.withLock {
             $0.muted = off
             $0.standby = standby
-            $0.localTurns = localTurns
             $0.mayStream = allowed
             // Off means off: speech kept for a session (the activation key's buffer, a sentence held through a
-            // reconnect) is dropped, or it would be replayed the moment one comes up; and nothing is left to commit.
-            if off {
-                $0.held.reset()
-                $0.uncommitted = false
-            }
+            // reconnect) is dropped, or it would be replayed the moment one comes up.
+            if off { $0.held.reset() }
         }
     }
 
@@ -743,6 +745,10 @@ import os
         audio.setMuted(micIdle)
         if on {
             clearHeardInput()
+            // The mic is off: a turn of yours still waiting for the sensor to hear you stop is over now.
+            let ending = speechEndPending
+            forgetSpeech()
+            if ending { onSpeech?(false) }
             return note("🔇 muted")
         }
         if micOff { return note("🎙  unmuted (still \(paused ? "paused" : "disconnected"))") }
@@ -900,17 +906,14 @@ import os
         goDormant(why, until: "you talk to her again", quietly: quietly)
     }
 
-    /// The user's spoken turn is over (deferred replies: the companion's cooldown ran out). Where turns are manual
-    /// it is committed first; then the reply is asked for. Before the session is up it waits, and goes right after
-    /// the speech held meanwhile. Elsewhere the provider has already answered the turn by itself.
+    /// The user's spoken turn is over (deferred replies: the companion's cooldown ran out): the reply is asked for.
+    /// Before the session is up it waits, and goes right after the speech held meanwhile. Elsewhere the provider has
+    /// already answered the turn by itself.
     public func submitTurn() {
         guard deferring, !micOff else { return }
         guard status == .live, established else {
             submitWhenUp = true
             return
-        }
-        if localTurns, micShared.withLock({ s in defer { s.uncommitted = false }; return s.uncommitted }) {
-            send(.commitInput)
         }
         awaitingReplySince = Date()
         if replies.wantReply() { requestResponse() }
@@ -950,6 +953,37 @@ import os
         correctedLeak = true
         send(.userText("[policy] Your last reply read \(what) aloud. Never say code, paths, file names, URLs or diffs; "
             + "describe them in plain words. Don't answer this note.", expectsReply: false))
+    }
+
+    /// The mic's speech sensor heard you start (true) or stop (false) talking. A start confirms the provider's "speech
+    /// started" from up to `bargeInWindow` before it; a stop ends the turn the provider already took for over.
+    private func micHeardSpeech(_ speaking: Bool) {
+        micHearsSpeech = speaking
+        if speaking {
+            if let pending = providerSpeech, !pending.counted,
+               Date().timeIntervalSince(pending.since) < Self.bargeInWindow {
+                confirmSpeech()
+            }
+        } else if speechEndPending {
+            speechEndPending = false
+            onSpeech?(false)
+        }
+    }
+
+    /// The provider heard speech start and the mic's speech sensor agrees: it's you. Talking over her stops her
+    /// (barge-in; the provider's VAD stops what it was generating), and the companion hears your turn begin.
+    private func confirmSpeech() {
+        guard let pending = providerSpeech, !pending.counted else { return }
+        providerSpeech = (since: pending.since, counted: true)
+        cutPlayback()
+        onSpeech?(true)
+    }
+
+    /// Forgets a turn of yours in progress (a new connection, the mic going off): nothing is left to confirm or end.
+    private func forgetSpeech() {
+        providerSpeech = nil
+        micHearsSpeech = false
+        speechEndPending = false
     }
 
     /// Stops local playback and tells the server how much of the reply was actually heard.
@@ -1043,15 +1077,23 @@ import os
         case .speechStopped:
             if !muted && !deferring { awaitingReplySince = Date() } // deferred: from submitTurn
             micShared.withLock { $0.midTurn = false }
-            onSpeech?(false)
+            let counted = providerSpeech?.counted ?? false
+            if providerSpeech != nil, !counted, audio.isSpeaking {
+                note("… kept talking: the mic heard no speech (echo or noise)")
+            }
+            providerSpeech = nil
+            guard counted else { return } // noise or her echo: no turn of yours began, so none ends
+            // Your turn is over once the mic hears you stop too (a pause the provider took for the end isn't).
+            if micHearsSpeech && !capabilities.explicitSpeechOnsets {
+                speechEndPending = true
+            } else {
+                onSpeech?(false)
+            }
         case .speechStarted:
             speechOverlappedPlayback = audio.isSpeaking // before barge-in stops the playback below
             lastSpeechStart = Date()
             micShared.withLock { $0.midTurn = true }
             awaitingReplySince = nil
-            // Barge-in: talking over the assistant cuts its audio; the server VAD handles the rest. The provider also
-            // hears the voice's own echo and noise as speech, so only cut when this mic heard a loud onset too.
-            let heard = !gated || micShared.withLock { Date().timeIntervalSince($0.lastLoud) < Self.bargeInWindow }
             if capabilities.turnEpochs {
                 // Every onset starts a new epoch and the provider cancels everything older, heard or not, so
                 // no response.created/done or reply from before it will arrive; waiting on one would stall replies.
@@ -1060,12 +1102,10 @@ import os
                 awaitingCreated = false
                 droppingAudio = audio.isSpeaking
             }
-            // With manual turns no provider VAD cancels the reply you talked over: stop it here.
-            if localTurns, heard, responseActive || audio.isSpeaking { stopSpeech(reason: "you spoke") }
-            if heard {
-                cutPlayback()
-            } else if audio.isSpeaking { note("… kept talking: the mic didn't hear you (echo or noise)") }
-            onSpeech?(true)
+            speechEndPending = false
+            providerSpeech = (since: Date(), counted: false)
+            // The session's own gate marked it (explicit onsets), or every sound is streamed: nothing to confirm.
+            if capabilities.explicitSpeechOnsets || !gated || micHearsSpeech { confirmSpeech() }
         case .functionCall(let callID, let name, let args):
             runTool(callID: callID, name: name, args: args, epoch: nil)
         case .localFunctionCall(let epoch, let callID, let name, let args):

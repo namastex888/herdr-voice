@@ -80,6 +80,25 @@ enum MicFrame: Equatable, CustomStringConvertible {
     }
 }
 
+/// The rig's speech sensor, standing in for Apple's sound classifier: speech is what a test feeds as speech (chunks
+/// tagged `speech…`, loud and above her echo) and nothing else, however loud (noise, a click, her own voice).
+final class TagSensor: SpeechSensor, @unchecked Sendable { // every access holds `lock`
+    private let lock = NSLock()
+    private var speaking = false
+
+    func hear(_ chunk: String, aboveEcho: Bool, loud: Bool) -> Bool? {
+        let tag = Data(base64Encoded: chunk).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        let speech = tag.hasPrefix("speech") && loud && aboveEcho
+        return lock.withLock {
+            guard speech != speaking else { return nil }
+            speaking = speech
+            return speech
+        }
+    }
+
+    func reset() { lock.withLock { speaking = false } }
+}
+
 /// One `Realtime` session with fake sockets and a made-up microphone: the mic path exactly as the app runs it
 /// (`Audio.onMic` → the speech gate → stream, hold or drop), minus the audio engine and the network.
 @MainActor final class SessionRig {
@@ -101,7 +120,7 @@ enum MicFrame: Equatable, CustomStringConvertible {
         // Local needs its runtime's request to connect at all; the cloud wires build theirs from the key.
         let request = provider == .local ? URLRequest(url: URL(string: "ws://127.0.0.1:9/local")!) : nil
         session = Realtime(provider: provider, key: "test-key", voice: "test", request: request,
-                           instructions: "test", greeting: "Hello.", socket: { _ in
+                           instructions: "test", greeting: "Hello.", speechSensor: TagSensor(), socket: { _ in
                                let socket = FakeSocket()
                                sockets.all.append(socket)
                                return socket

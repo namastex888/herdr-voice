@@ -193,8 +193,6 @@ struct Scenario: Sendable, CustomTestStringConvertible {
                      #expect(json(sent) != json(wire.encode(.deferReplies(false))))
                  }),
         Scenario(name: "deferReplies off", command: .deferReplies(false), expect: { .iff($0.deferredReplies) }),
-        // Manual turns only mean something with replies deferred.
-        Scenario(name: "commitInput", command: .commitInput, expect: { .iff($0.manualTurns && $0.deferredReplies) }),
     ]
 
     /// Exhaustive on purpose: a new WireCommand case doesn't compile until it is named here, and the coverage test
@@ -214,13 +212,12 @@ struct Scenario: Sendable, CustomTestStringConvertible {
         case .cancelReply: "cancelReply"
         case .truncate: "truncate"
         case .deferReplies: "deferReplies"
-        case .commitInput: "commitInput"
         }
     }
 
     static let caseNames: Set<String> = [
         "setup", "updateTools", "updateInstructions", "inputStarted", "appendAudio", "clearInput", "audioPaused",
-        "userText", "toolOutputs", "requestReply", "cancelReply", "truncate", "deferReplies", "commitInput",
+        "userText", "toolOutputs", "requestReply", "cancelReply", "truncate", "deferReplies",
     ]
 }
 

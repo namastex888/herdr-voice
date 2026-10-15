@@ -58,8 +58,8 @@ public enum ProviderContract {
                 "auth": auth(provider), "steps": steps]
     }
 
-    /// A turn-detection change, with the `turn_detection` it sends so the probe can compare the echo (null for xAI's
-    /// manual turns).
+    /// A turn-detection change, with the `turn_detection` it sends so the probe can compare the echo. A wire that can't
+    /// defer replies sends nothing, and the probe records the step as not applicable.
     static func deferStep(_ name: String, _ wire: any Wire, on: Bool) -> [String: Any] {
         let messages = wire.encode(.deferReplies(on))
         let session = messages.first?["session"] as? [String: Any]

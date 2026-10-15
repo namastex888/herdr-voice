@@ -111,7 +111,7 @@ public final class LocalWire: Wire, @unchecked Sendable { // epoch and utterance
             return [["type": "response.cancel", "epoch": epoch]]
         case .truncate(let itemID, let audioEndMs):
             return [["type": "response.truncate", "epoch": epoch, "item_id": itemID, "audio_end_ms": audioEndMs]]
-        case .deferReplies, .commitInput:
+        case .deferReplies:
             return [] // the session already asks for every reply; the gate's audioPaused commits the utterance
         }
     }

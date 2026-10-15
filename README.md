@@ -34,8 +34,9 @@ that grows into a phone and controls your Mac by voice or text. She starts like 
 has and nothing else, and learns the rest from you.
 
 - **Tap to talk** (the default): tap Right ⌘ alone and talk; she answers once you stop (the provider's speech
-  detection, then a half-second cooldown in case you go on). After her reply you can keep talking for a follow-up
-  window (8 s); then the session closes, so nothing is billed between conversations. Tap again to talk over her or to
+  detection; with GPT, then a half-second cooldown in case you go on). Noise doesn't count as you: it never cuts her
+  off, cancels the cooldown or starts a turn. After her reply you can keep talking for a follow-up window (20 s,
+  starting over whenever either of you speaks); then the session closes, so nothing is billed between conversations. Tap again to talk over her or to
   dismiss, double-tap for hands-free until Esc, "that's all" or another double tap. ⌘C and other chords never
   activate. The key needs Input Monitoring; without it the phone's mic button does the same (⌥⌘M is always Mute).
   **Wake word** does it with "Hey Companion", recognized on the Mac; **Always on** keeps 0.2's open mic (the
@@ -569,8 +570,10 @@ The rules are in its instructions, and herdr-voice also enforces them in code (`
   a note telling it to describe such things in plain words. No extra reply is spoken. The pane logs
   `⚠  the voice read a file path aloud; it will be told not to`.
 - **Real interruptions only.** The provider's speech detection also hears the voice's own echo and room noise. The
-  voice only stops for you when your mic heard a speech-level sound in the last 1.5 seconds; otherwise it keeps
-  talking and the pane logs `… kept talking: the mic didn't hear you (echo or noise)`. With
+  voice only stops for you, and a turn only counts as yours, when the mic's own speech sensor hears you too, up to
+  1.5 seconds after the provider does (input below a quarter of the voice's own level is taken for its echo, with
+  every provider); otherwise it keeps talking and the pane logs `… kept talking: the mic heard no speech (echo or
+  noise)`. With
   `HERDR_VOICE_STREAM=always` this check is off, and any speech the provider detects interrupts.
 - **One reply at a time.** Several tool results or agent reports arriving together are answered in a single reply,
   and identical tool calls repeated within a few seconds are not run twice, so the voice doesn't talk over itself.
