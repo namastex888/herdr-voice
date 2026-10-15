@@ -15,7 +15,8 @@ public enum WireCommand: Sendable {
     case inputStarted(utteranceID: String)
     /// 20 ms of mic audio, base64 PCM16 24 kHz mono.
     case appendAudio(String)
-    /// Muting: drop what the provider buffered of your speech.
+    /// Muting: drop what the provider buffered of your speech (only where `capabilities.clearsInput`; elsewhere
+    /// nothing is sent, and the mic just stops).
     case clearInput
     /// The speech gate closed: the mic stream pauses here (lets a provider end the turn without trailing audio).
     case audioPaused
@@ -85,6 +86,10 @@ public struct WireCapabilities: Equatable, Sendable {
     /// While replies are deferred the provider detects no speech either: the session's speech gate marks where
     /// speech starts and stops, and `commitInput` ends each turn.
     public var manualTurns = false
+    /// The provider can drop what it buffered of the user's speech (`clearInput`), so a mute leaves nothing of it to
+    /// answer. Without it (Gemini) nothing is sent: the only way to stop its input, end of stream, answers what it
+    /// heard.
+    public var clearsInput = true
 }
 
 public extension WireCapabilities {
@@ -107,6 +112,7 @@ public extension WireCapabilities {
         "metered": "billed by use, so a quiet session is closed until you speak",
         "deferredReplies": "the session can hold the reply to a spoken turn until it asks for one (deferReplies)",
         "manualTurns": "with replies deferred, the session's gate marks speech and commits each turn itself",
+        "clearsInput": "a mute drops what the provider buffered of your speech; otherwise the mic just stops",
     ]
 }
 

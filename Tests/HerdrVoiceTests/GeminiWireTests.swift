@@ -37,7 +37,7 @@ private func dig(_ obj: Any?, _ path: String...) -> Any? {
     let w = GeminiLiveWire()
     #expect(msg(w.encode(.appendAudio("QUJD"))[0]) == msg(["realtimeInput": ["audio": ["data": "QUJD", "mimeType": "audio/pcm;rate=24000"]]]))
     #expect(msg(w.encode(.audioPaused)[0]) == msg(["realtimeInput": ["audioStreamEnd": true]]))
-    #expect(msg(w.encode(.clearInput)[0]) == msg(["realtimeInput": ["audioStreamEnd": true]]))
+    #expect(w.encode(.clearInput).isEmpty) // a mute must not end the turn: audioStreamEnd would have it answered
     #expect(dig(w.encode(.userText("[herdr] done", expectsReply: true))[0], "clientContent", "turnComplete") as? Bool == true)
     #expect(dig(w.encode(.userText("[context] recap", expectsReply: false))[0], "clientContent", "turnComplete") as? Bool == false)
     let response = w.encode(.toolOutputs([ToolOutput(callID: "a", name: "focus", output: "ok"),
@@ -47,7 +47,7 @@ private func dig(_ obj: Any?, _ path: String...) -> Any? {
     #expect(replies.map { $0["id"] as? String } == ["a", "b"])
     #expect(dig(replies[1], "response", "output") as? String == "done")
     #expect(w.encode(.requestReply).isEmpty && w.encode(.cancelReply).isEmpty && w.encode(.truncate(itemID: "x", audioEndMs: 1)).isEmpty)
-    #expect(w.capabilities == WireCapabilities(explicitReplies: false, nativeResumption: true))
+    #expect(w.capabilities == WireCapabilities(explicitReplies: false, nativeResumption: true, clearsInput: false))
 }
 
 // MARK: decoding whole exchanges

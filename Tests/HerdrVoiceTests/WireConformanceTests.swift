@@ -149,7 +149,7 @@ struct Scenario: Sendable, CustomTestStringConvertible {
                  prime: [.inputStarted(utteranceID: "utterance-3"), .appendAudio(audio)],
                  command: .audioPaused,
                  expect: { $0.explicitSpeechOnsets ? .messages : .either }),
-        Scenario(name: "clearInput", command: .clearInput, expect: { _ in .messages }),
+        Scenario(name: "clearInput", command: .clearInput, expect: { .iff($0.clearsInput) }),
         Scenario(name: "userText without a reply",
                  command: .userText(userWords, expectsReply: false),
                  expect: { _ in .messages },

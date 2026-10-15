@@ -37,9 +37,9 @@ has and nothing else, and learns the rest from you.
   detection, then a half-second cooldown in case you go on). After her reply you can keep talking for a follow-up
   window (8 s); then the session closes, so nothing is billed between conversations. Tap again to talk over her or to
   dismiss, double-tap for hands-free until Esc, "that's all" or another double tap. ⌘C and other chords never
-  activate. The key needs Input Monitoring; without it ⌥⌘M and the talk button do the same. **Wake word** does it
-  with "Hey Companion", recognized on the Mac; **Always on** keeps 0.2's open mic (the expensive one). Settings →
-  Listening picks the mode, the key, the follow-up time and the phrase.
+  activate. The key needs Input Monitoring; without it the phone's mic button does the same (⌥⌘M is always Mute).
+  **Wake word** does it with "Hey Companion", recognized on the Mac; **Always on** keeps 0.2's open mic (the
+  expensive one). Settings → Listening picks the mode, the key, the follow-up time and the phrase.
 - **The phone**: click the orb (or tap the key) and it grows into an Android phone: a lock screen with the clock and
   what came in, a home screen with each harness and learned skill as an app (and "Teach me" slots while she's new),
   Messages, Skills, Settings, and a notification shade (pull down the status bar) with quick settings for the mic,
@@ -70,10 +70,12 @@ has and nothing else, and learns the rest from you.
   agent's report prompted them). Switching the voice model, turning on a harness, AppleScript or the shell, and a
   reset always wait for your spoken yes.
 - **Session controls** are the shade's quick settings, the orb's right-click menu and the menu bar, next to the
-  session's state (Connected, Idle, Muted, Paused, Disconnected, Offline). **Mute** turns the mic off (`⌥⌘M`, which
-  starts a conversation instead while the activation key can't be watched); she can still talk. **Pause** holds
-  everything: mic off, speech cut, replies and agent reports kept until **Resume**. **Stop speaking** cuts the current
-  reply (`Esc` too, taken only while she speaks or the phone has focus; in tap-to-talk it ends the conversation).
+  session's state (Connected, Idle, Muted, Paused, Disconnected, Offline). **Mute** turns the mic off (`⌥⌘M` too,
+  in every mode); she can still talk. Muted, nothing from the mic leaves the Mac, not even what a key press or a
+  reconnect had kept, until you unmute: a tap, the follow-up window or a reopened session never unmutes. **Pause**
+  holds everything: mic off, speech cut, replies and agent reports kept until **Resume**. **Stop speaking** cuts the
+  current reply (`Esc` too, taken only while she speaks or the phone has focus; in tap-to-talk it ends the
+  conversation).
   **Disconnect** closes the session now, so billing stops, and nothing reopens it, not speech, not an agent report,
   until **Connect**, a tap or a message you type; reports that came in meanwhile are said then. Typing a message also
   ends a pause.
@@ -344,7 +346,7 @@ thing, the voice asks which one you mean instead of guessing.
 
 | Control | Action |
 |---|---|
-| `⌥⌘M`, or click the orb | Mute or unmute the mic, from any app. When disconnected, reconnects instead |
+| `⌥⌘M`, or click the orb | Mute or unmute the mic, from any app, whatever the session is doing. Unmuting a closed session reopens it when you speak |
 | Right-click (or control-click) the orb | Menu: **Show voice pane** unzooms the tab so the voice's transcript is in view; **Hide voice pane** zooms the pane above it again; the model entries switch the AI model (**Grok**, **GPT**, **Gemini**; the current one is checked, models without an API key are greyed out), which carries the conversation over to the new model, or **Quit herdr-voice**, which closes the provider session and exits |
 | `Esc` while the voice is talking | Stop it and cancel the rest of the reply |
 | Talk over the voice | Stop it and listen to you (only when your mic actually heard you, so echo and noise don't cut it off) |
@@ -385,7 +387,7 @@ back to the bottom-left of the screen and stays visible everywhere. `--orb-demo`
 | Pink / violet | The assistant is speaking. The core pulses with its voice |
 | Amber, churning | An agent is working on something you sent |
 | Grey | Muted |
-| Red | Offline. Press `⌥⌘M` to reconnect |
+| Red | Offline. Speak to try again |
 
 A small **thought bubble with pulsing dots** appears at the orb's bottom-right while something is working: the voice
 model processing what you said (or between tool steps), a Herdr tool call running, or a coding agent busy with work
@@ -727,7 +729,7 @@ delta, the process scan (0.4 ms every 2 s), and `herdr` CLI calls (under 10 ms e
 | A model is greyed out in the orb's menu | Local OpenLive isn't set up yet: run `scripts/local-openlive-setup`. Any other model has no key yet: `herdr-voice setup openai` or `herdr-voice setup gemini` in another terminal; the menu picks it up next time you open it |
 | `⚠ could not register ⌥⌘M` | Another app owns that shortcut. Set `HERDR_VOICE_HOTKEY_KEYCODE`, or click the orb to mute |
 | `↻ …reconnecting` in the log | Normal: the session ended (idle or time limit) or the network dropped; it reconnects by itself (1 → 30 s backoff) |
-| `✖ …gave up after 8 tries` / red orb | Repeated failures, usually a wrong or revoked key or no network. Fix that, then press `⌥⌘M` |
+| `✖ …gave up after 8 tries` / red orb | Repeated failures, usually a wrong or revoked key or no network. Fix that, then speak to try again |
 | `⚠ not inside a Herdr pane` | Start it from a Herdr pane so it controls the right session |
 | The voice hears itself | Echo cancellation needs the default input/output devices; use headphones if your speakers are very loud (and make sure `HERDR_VOICE_ECHO_CANCEL` isn't `0`) |
 | herdr-voice uses more CPU than you'd like | Most of it is macOS voice processing (about 12% of a core). With headphones, set `HERDR_VOICE_ECHO_CANCEL=0` (about 1% instead); otherwise mute when you aren't talking (about 5%) |

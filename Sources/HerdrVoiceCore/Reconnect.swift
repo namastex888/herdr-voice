@@ -10,7 +10,7 @@ public enum Reconnect {
         case dropped
     }
 
-    /// Consecutive failed attempts before giving up and waiting for ⌥⌘M (e.g. a revoked key fails every time).
+    /// Consecutive failed attempts before giving up and waiting for speech (e.g. a revoked key fails every time).
     public static let maxAttempts = 8
 
     /// Seconds to wait before reconnecting, or nil to wait for the developer instead.

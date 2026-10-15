@@ -36,7 +36,9 @@ public final class GeminiLiveWire: Wire, @unchecked Sendable {
         self.model = model
     }
 
-    public var capabilities: WireCapabilities { WireCapabilities(explicitReplies: false, nativeResumption: true) }
+    public var capabilities: WireCapabilities {
+        WireCapabilities(explicitReplies: false, nativeResumption: true, clearsInput: false)
+    }
 
     // MARK: encoding
 
@@ -85,9 +87,12 @@ public final class GeminiLiveWire: Wire, @unchecked Sendable {
             return []
         case .appendAudio(let b64):
             return [["realtimeInput": ["audio": ["data": b64, "mimeType": Self.inputMimeType]]]]
-        case .clearInput, .audioPaused:
+        case .audioPaused:
             // Tells Gemini the mic paused, so it can end the turn on what it has.
             return [["realtimeInput": ["audioStreamEnd": true]]]
+        case .clearInput:
+            // Gemini can't drop what it heard, and ending the stream would have it answered: a mute just stops.
+            return []
         case let .userText(text, expectsReply):
             return [["clientContent": [
                 "turns": [["role": "user", "parts": [["text": text]]]],

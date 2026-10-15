@@ -59,7 +59,8 @@ extension CompanionController {
         keyMonitor?.key = key
         if keyMonitor?.start() != true {
             notes.append("To use \(key.title), allow Voice Companion in System Settings → Privacy & Security → "
-                         + "Input Monitoring. Until then \(Hotkey.label) or the talk button starts a conversation.")
+                         + "Input Monitoring. Until then the mic button starts a conversation; \(Hotkey.label) only "
+                         + "mutes.")
         }
     }
 
@@ -118,21 +119,12 @@ extension CompanionController {
         }
     }
 
-    /// The on-screen talk button, and ⌥⌘M while the key can't be watched: a tap.
+    /// The on-screen talk button: a tap.
     func talkTapped() {
         if activationMode.opensOnRequest {
             activation(.tap)
         } else {
             session?.listen()
-        }
-    }
-
-    /// ⌥⌘M: the talk tap where the activation key can't be watched; Mute otherwise.
-    func hotkeyPressed() {
-        if activationMode.opensOnRequest, keyMonitor?.running != true {
-            talkTapped()
-        } else {
-            hotkeyMute()
         }
     }
 

@@ -272,9 +272,11 @@ import VoiceEngine
         syncControls()
     }
 
-    /// ⌥⌘M is a toggle by nature: it presses whatever the Mute control offers now. A press delivered twice, or
-    /// right after a Mute press elsewhere, counts once.
-    func hotkeyMute() {
+    /// ⌥⌘M is Mute, in every mode: a toggle by nature, it presses whatever the Mute control offers now. A press
+    /// delivered twice, or right after a Mute press elsewhere, counts once. It never starts a conversation: in 0.3.0
+    /// it was the talk tap while the activation key couldn't be watched (no Input Monitoring), so a press meant to
+    /// mute opened the mic and what followed was answered.
+    func hotkeyPressed() {
         guard muteDebounce.accept() else { return }
         syncControls()
         press(chat.controls.mutePress)

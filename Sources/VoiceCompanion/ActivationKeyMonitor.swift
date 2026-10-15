@@ -5,7 +5,8 @@ import HerdrVoiceCore
 /// Watches the activation key in every app through a listen-only event tap: it sees key events and never changes or
 /// swallows them, so ⌘C still copies. That needs Input Monitoring (Privacy & Security), which macOS asks for once;
 /// Accessibility (what a global NSEvent monitor needs) would also let an app control the Mac, which this doesn't.
-/// Without it the companion falls back to ⌥⌘M and the on-screen button. `ModifierTap` decides what each event means.
+/// Without it the companion falls back to the on-screen mic button (⌥⌘M is Mute, always). `ModifierTap` decides
+/// what each event means.
 @MainActor final class ActivationKeyMonitor {
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?

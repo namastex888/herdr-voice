@@ -160,7 +160,7 @@ extension CompanionController {
     /// How to start talking, in the current mode.
     var talkHint: String {
         switch activationMode {
-        case .tapToTalk: keyMonitor?.running == true ? "Tap \(settings.activationKey.title) to talk" : "Press \(Hotkey.label) to talk"
+        case .tapToTalk: keyMonitor?.running == true ? "Tap \(settings.activationKey.title) to talk" : "Tap the mic to talk"
         case .wakeWord: "Say “\(settings.wakePhrase)”"
         case .alwaysOn: "Just talk"
         }
@@ -169,7 +169,7 @@ extension CompanionController {
     /// The talk trigger in a word or two, for a tile.
     var talkKey: String {
         switch activationMode {
-        case .tapToTalk: keyMonitor?.running == true ? settings.activationKey.title : Hotkey.label
+        case .tapToTalk: keyMonitor?.running == true ? settings.activationKey.title : "Mic button"
         case .wakeWord: "Wake word"
         case .alwaysOn: "Always on"
         }
@@ -177,7 +177,7 @@ extension CompanionController {
 
     var talkSymbol: String {
         switch activationMode {
-        case .tapToTalk: keyMonitor?.running == true ? "command" : "keyboard"
+        case .tapToTalk: keyMonitor?.running == true ? "command" : "mic"
         case .wakeWord: "waveform"
         case .alwaysOn: "ear"
         }

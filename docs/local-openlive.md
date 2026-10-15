@@ -29,7 +29,7 @@ mismatch stops startup. The runtime has no CPU, cloud, ACP, or reduced-tool fall
 
 If the Electron child crashes mid-session, herdr-voice relaunches it and reconnects to its new port, with the
 conversation recap, in about 5 s on a warm model cache. A helper that keeps failing backs off like any lost connection
-(1, 2, 4 … 30 s) and gives up after 8 tries; ⌥⌘M or choosing Local from the orb then tries again.
+(1, 2, 4 … 30 s) and gives up after 8 tries; speaking or choosing Local from the orb then tries again.
 
 This version uses Electron's persistent Cache API for speech assets. The cache, Electron's other data, and the setup
 inventory live in a state directory outside the plugin folder, so a plugin update from `herdr plugin install` keeps

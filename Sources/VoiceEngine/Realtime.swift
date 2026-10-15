@@ -345,8 +345,10 @@ import os
             stream(link)
             return
         }
-        // No session right now (closed while quiet, warming, or reconnecting): retain at most ten seconds.
-        let held = micShared.withLock { state -> (link: MicLink?, onsets: Bool) in
+        // No session right now (closed while quiet, warming, or reconnecting): retain at most ten seconds. Muted since
+        // this chunk was read: it is dropped, never kept for a session.
+        let held = micShared.withLock { state -> (link: MicLink?, onsets: Bool)? in
+            if state.muted { return nil }
             if state.mayStream {
                 return (state.link, state.onsets || state.localTurns)
             }
@@ -358,6 +360,7 @@ import os
             state.lastSpeech = Date()
             return (nil, state.onsets || state.localTurns)
         }
+        guard let held else { return }
         if let link = held.link {
             stream(link)
             return
@@ -386,6 +389,11 @@ import os
         guard !buffering else { return false }
         return micShared.withLock { s in
             let held = s.held.drain()
+            // Kept before a mute (or a pause, or standby): it never leaves, whatever brought the session up.
+            guard !s.muted, !s.standby else {
+                s.mayStream = false
+                return false
+            }
             let hadAudio = held.utteranceID != nil || !held.chunks.isEmpty
             var frames: [[String: Any]] = []
             if let id = held.utteranceID {
@@ -560,7 +568,7 @@ import os
         guard !disconnectedByUser else { return }
         guard let delay = Reconnect.delay(reason: reason, attempt: attempts, muted: muted) else {
             note(muted ? "… \(detail); reconnects when you unmute"
-                      : "✖ \(detail); gave up after \(attempts) tries, press \(Hotkey.label) to reconnect")
+                      : "✖ \(detail); gave up after \(attempts) tries; speak to try again")
             return
         }
         note(delay == 0 ? "↻ \(detail)" : "↻ \(detail); reconnecting in \(Int(delay)) s")
@@ -624,6 +632,12 @@ import os
             $0.standby = standby
             $0.localTurns = localTurns
             $0.mayStream = allowed
+            // Off means off: speech kept for a session (the activation key's buffer, a sentence held through a
+            // reconnect) is dropped, or it would be replayed the moment one comes up; and nothing is left to commit.
+            if off {
+                $0.held.reset()
+                $0.uncommitted = false
+            }
         }
     }
 
@@ -701,28 +715,11 @@ import os
         s.close(.normalClosure)
     }
 
+    /// The plugin's ⌥⌘M and orb click: mutes when unmuted, whatever the connection is doing (a session closed while
+    /// quiet is its usual state between sentences, and a press that only re-armed it let the next sentence through);
+    /// unmutes when muted.
     public func toggleMute() {
-        // Disconnected by the user, a press is only a mute: reopening is Connect's job.
-        if status == .disconnected && !disconnectedByUser {
-            // Offline while muted means we were waiting for you: unmute and reconnect in one press.
-            if muted {
-                muted = false
-                audio.setMuted(micIdle)
-                note("🎙  listening")
-            }
-            attempts = 0
-            if gated {
-                // No need to pay for a session before you say something.
-                dormant = true
-                note("🎙  listening; the session opens when you speak")
-                return
-            }
-            return connect()
-        }
-        muted.toggle()
-        audio.setMuted(micIdle)
-        if muted { clearHeardInput() }
-        note(muted ? "🔇 muted" : !micOff ? "🎙  listening" : "🎙  unmuted (still \(paused ? "paused" : "disconnected"))")
+        setMuted(!muted)
     }
 
     /// Drops what the provider heard but hasn't answered, as the mic goes off.
@@ -737,16 +734,28 @@ import os
     }
 
     /// Sets the mute to `on`, whatever the connection is doing; asking again for the state it holds does nothing.
-    /// `toggleMute` reads a press while offline as "reconnect", which suits the plugin's hotkey; a Mute button has
-    /// to mute, so muting never goes through the toggle. Unmuting a session that closed while muted reopens it the
-    /// way `toggleMute` does.
+    /// Muted, nothing from the mic leaves the Mac until the user unmutes: not live speech, not speech kept for a
+    /// session, and what the provider buffered is dropped. Unmuting a session that closed meanwhile (not one the user
+    /// disconnected) reopens it: at once, or, gated, when you next speak.
     public func setMuted(_ on: Bool) {
         guard on != muted else { return }
-        if !on, status == .disconnected, !disconnectedByUser { return toggleMute() }
         muted = on
         audio.setMuted(micIdle)
-        if on { clearHeardInput() }
-        note(on ? "🔇 muted" : !micOff ? "🎙  listening" : "🎙  unmuted (still \(paused ? "paused" : "disconnected"))")
+        if on {
+            clearHeardInput()
+            return note("🔇 muted")
+        }
+        if micOff { return note("🎙  unmuted (still \(paused ? "paused" : "disconnected"))") }
+        if standby { return note("🎙  unmuted") } // between conversations: the next one hears you
+        guard status == .disconnected else { return note("🎙  listening") }
+        attempts = 0
+        if gated {
+            // No need to pay for a session before you say something.
+            dormant = true
+            return note("🎙  listening; the session opens when you speak")
+        }
+        note("🎙  listening")
+        connect()
     }
 
     /// Whether the mic queue lets speech through, to the session or held for it. Closed while muted, paused or

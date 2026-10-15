@@ -147,7 +147,7 @@ import VoiceEngine
     let muted = mutedOnce && session.muted && !session.micOpen && state() == "Muted" && titles().contains("Unmute")
         && !controller.chat.controls.listening
     check("one Mute press leaves the session muted and the mic gate closed, even delivered twice", muted, state())
-    controller.hotkeyMute() // ⌥⌘M right after: the same press again as far as anyone meant it
+    controller.hotkeyPressed() // ⌥⌘M right after: the same press again as far as anyone meant it
     check("⌥⌘M a moment after a Mute press counts once", session.muted && !session.micOpen, state())
     controller.press(controller.chat.controls.mutePress)
     check("Unmute opens the mic again", !session.muted && session.micOpen, state())
@@ -194,6 +194,16 @@ import VoiceEngine
     let t = Date()
     func at(_ seconds: TimeInterval) -> Date { t.addingTimeInterval(seconds) }
     func phase() -> String { "\(controller.conversation)" }
+
+    // ⌥⌘M is Mute in tap-to-talk too, also while the key can't be watched (no Input Monitoring, as here). The 0.3.0
+    // bug: there it was the talk tap, so a press meant to mute opened the mic and what followed was answered.
+    RunLoop.main.run(until: Date().addingTimeInterval(PressDebounce().interval + 0.05)) // not the last press again
+    let unwatched = controller.keyMonitor?.running != true && !session.muted
+    controller.hotkeyPressed()
+    check("⌥⌘M mutes in tap-to-talk, with the key unwatched, and opens nothing",
+          unwatched && session.muted && !session.micOpen && controller.conversation == .idle && session.standby,
+          phase())
+    controller.press(controller.chat.controls.mutePress)
 
     controller.activation(.keyDown, at: at(0))
     let buffering = !session.standby && session.buffering
