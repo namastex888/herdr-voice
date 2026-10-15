@@ -41,6 +41,33 @@ func stopRunning() -> Int32 {
     return 0
 }
 
+/// `herdr-voice providers`: the provider table committed as docs/providers.md.
+/// `herdr-voice providers contract TOOLS.json DIR`: writes DIR/<provider>.json, the live-contract plan of each provider
+/// that needs a key, and prints "provider<TAB>Keychain service" for each (see scripts/provider-contract).
+func providersCommand(_ args: [String]) -> Int32 {
+    guard let first = args.first else {
+        print(ProviderTable.markdown(), terminator: "")
+        return 0
+    }
+    let fail = { (message: String) -> Int32 in
+        FileHandle.standardError.write(Data((message + "\n").utf8))
+        return message.hasPrefix("usage") ? 2 : 1
+    }
+    guard first == "contract", args.count == 3 else { return fail("usage: herdr-voice providers [contract TOOLS.json DIR]") }
+    guard let data = FileManager.default.contents(atPath: args[1]),
+          let tools = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]], !tools.isEmpty
+    else { return fail("no tool definitions in \(args[1]) (write them with VoiceCompanion --dump-tools)") }
+    for provider in Provider.allCases where provider.requiresAPIKey {
+        let file = URL(fileURLWithPath: args[2]).appendingPathComponent("\(provider.rawValue).json")
+        guard let plan = try? JSONSerialization.data(withJSONObject: ProviderContract.plan(for: provider, tools: tools),
+                                                     options: [.sortedKeys]),
+              (try? plan.write(to: file)) != nil
+        else { return fail("couldn't write \(file.path)") }
+        print("\(provider.rawValue)\t\(provider.keyEnv)")
+    }
+    return 0
+}
+
 /// Opens the plugin's voice pane below the pane this was typed in. False when that isn't possible (plugin not
 /// installed, say), so the caller runs here instead. The voice hides its pane itself as it starts (hideVoicePane).
 func openVoicePane(provider: String?, environment env: [String: String]) -> Bool {

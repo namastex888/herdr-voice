@@ -32,6 +32,7 @@ if args.count > 1 {
     case "install-command": exit(installCommand())
     case "uninstall-command": exit(uninstallCommand())
     case "stop": exit(stopRunning())
+    case "providers": exit(providersCommand(Array(args.dropFirst(2))))
     case "help", "--help", "-h":
         print("""
         herdr-voice                    start the voice (in Herdr: in a pane below this one)
@@ -42,6 +43,7 @@ if args.count > 1 {
         herdr-voice install-command    put herdr-voice on your PATH (~/.local/bin)
         herdr-voice uninstall-command  undo install-command
         herdr-voice tool [NAME JSON]   run one of the voice's tools by hand
+        herdr-voice providers          print each provider's model, endpoint and capabilities (docs/providers.md)
         herdr-voice --orb-demo         show the orb only
         """)
         exit(0)
