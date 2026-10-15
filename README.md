@@ -30,19 +30,28 @@ voice: Done. 42 tests pass; it fixed a null check in the login handler.
 ## Voice Companion (standalone app)
 
 This fork also builds **Voice Companion**, a menu bar app that doesn't need Herdr: a floating chat and orb that
-controls your Mac by voice or text, and grows one skill at a time. Herdr becomes one of the things it can drive.
+controls your Mac by voice or text. She starts like a new hire: she knows the controls she has and nothing else, and
+learns the rest from you.
 
-- **Harnesses** are what it can control: the Mac (apps, links, files, volume, dark mode, clipboard, notifications,
+- **Harnesses** are what she can control: the Mac (apps, links, files, volume, dark mode, clipboard, notifications,
   Shortcuts, battery, display sleep; AppleScript and shell commands if you switch them on), and Herdr when it's
-  installed. None of them needs Accessibility permission.
-- **Skills** are slices of a harness ("Apps and files", "Mac settings", "Coding agents"…). Teach new ones out loud:
-  "learn a skill called start my day that opens Mail and Calendar and sets the volume to 30". After your spoken yes it
-  is saved as JSON in `~/Library/Application Support/Voice Companion/skills` and runs whenever you say its name.
+  installed (she picks it up within a minute). None of them needs Accessibility permission.
+- **Zero skills to start.** Her first greeting says she's new, names what she can control and asks for a first task.
+  Teach her out loud or in the chat ("when I say start my day, open Mail and Calendar and set the volume to 30"):
+  she saves the steps, how-to notes, or both as a skill and runs it whenever you ask for it by name.
+- **She proposes changes to herself**: a skill to learn or forget, a fact to remember, how you like things done,
+  her name or manner. Every change waits for your own yes, typed or spoken, even when you asked for it; every change
+  is logged and can be reverted. Her harnesses, voice model, keys and safety rules are yours alone to change.
 - **Routing**: every turn, spoken or typed, goes to [Jev](https://docs.typesafe.ai/models) (`jev-1.14.0`) while the
-  voice answers. The skill it picks gets its tools loaded for the next steps (OpenAI and Grok swap tools mid-session).
-  Without a Jev key it routes by matching words, and the voice can always load a skill itself.
-- The **Skills** tab maps every harness action and every learned skill; **Settings** stores keys in your Keychain
-  (it can reuse MeetingPulse's Jev key). Risky actions keep herdr-voice's rule: only your own yes confirms them.
+  voice answers, choosing between her learned skills, a harness's raw controls and plain chat. Without a Jev key it
+  routes by matching words, and the voice can always load a skill itself.
+- The **Skills** tab maps what she can do: what she controls (switch each harness and AppleScript on or off), what she
+  knows (each skill's steps, notes and status, with Forget), how she has changed (who changed what and when, each with
+  Revert) and how she has grown. **Settings** edits her identity and memory, picks the voice model, stores keys in
+  your Keychain (it can reuse MeetingPulse's Jev key) and can reset her to a new hire. Risky actions keep
+  herdr-voice's rule: only your own yes confirms them.
+- Everything she is lives in `~/Library/Application Support/Voice Companion/config.json`; 0.1.0's settings and
+  learned skills are carried over the first time.
 
 Build, sign and notarize: `scripts/companion-build-dmg`, then `scripts/companion-notarize` (see
 [Packaging/VoiceCompanion/README.md](Packaging/VoiceCompanion/README.md)). `VoiceCompanion --self-test` checks a build
