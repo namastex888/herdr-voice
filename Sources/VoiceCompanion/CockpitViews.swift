@@ -171,7 +171,7 @@ struct RecentConversations: View {
                     .font(.system(size: 12)).foregroundStyle(theme.onSurfaceVariant)
             }
             ForEach(recorder.saved.prefix(3), id: \.id) { transcript in
-                ConversationRow(transcript: transcript) { model.go(.conversation(transcript.id)) }
+                ConversationRow(transcript: transcript, carded: false) { model.go(.conversation(transcript.id)) }
             }
             if recorder.saved.count > 3 {
                 Button("All conversations") { model.go(.conversations) }.buttonStyle(TonalButton())
@@ -334,19 +334,34 @@ struct CockpitDetailScreen: View {
                 .chartYAxisLabel(series.unit)
             }
         }
+        // Ticks away from the trailing edge, so the last date isn't cut; dates and numbers written one way.
         .chartXAxis {
-            AxisMarks(values: .stride(by: .day, count: 4)) { _ in
+            AxisMarks(values: Self.dateTicks(days.map(\.date))) { value in
                 AxisGridLine().foregroundStyle(theme.outlineVariant.opacity(0.5))
-                AxisValueLabel(format: .dateTime.month(.abbreviated).day()).foregroundStyle(theme.onSurfaceVariant)
+                AxisValueLabel {
+                    if let date = value.as(Date.self) {
+                        Text(date.formatted(Date.FormatStyle(locale: Locale(identifier: "en_US")).month(.abbreviated).day()))
+                            .foregroundStyle(theme.onSurfaceVariant)
+                    }
+                }
             }
         }
         .chartYAxis {
-            AxisMarks(values: .automatic(desiredCount: 4)) { value in
-                AxisGridLine().foregroundStyle(theme.outlineVariant.opacity(0.5))
-                AxisValueLabel {
-                    if let v = value.as(Double.self), !counts || v == v.rounded() {
-                        Text(money ? WidgetReading.usd(v) : counts ? "\(Int(v))" : String(format: "%g", v))
-                            .foregroundStyle(theme.onSurfaceVariant)
+            if counts {
+                AxisMarks(values: Self.wholeTicks(days.map { series.value($0.metrics) })) { value in
+                    AxisGridLine().foregroundStyle(theme.outlineVariant.opacity(0.5))
+                    AxisValueLabel {
+                        if let v = value.as(Double.self) { Text("\(Int(v))").foregroundStyle(theme.onSurfaceVariant) }
+                    }
+                }
+            } else {
+                AxisMarks(values: .automatic(desiredCount: 4)) { value in
+                    AxisGridLine().foregroundStyle(theme.outlineVariant.opacity(0.5))
+                    AxisValueLabel {
+                        if let v = value.as(Double.self) {
+                            Text(money ? String(format: "$%.2f", v) : String(format: "%g", v))
+                                .foregroundStyle(theme.onSurfaceVariant)
+                        }
                     }
                 }
             }
@@ -356,26 +371,43 @@ struct CockpitDetailScreen: View {
         .environment(\.locale, Locale(identifier: "en_US"))
     }
 
+    /// Every fourth day, ending two days before the last, so no label sits on the trailing edge.
+    static func dateTicks(_ dates: [Date]) -> [Date] {
+        guard dates.count > 2 else { return dates }
+        return stride(from: dates.count - 3, through: 0, by: -4).map { dates[$0] }.reversed()
+    }
+
+    /// Whole-number gridlines for a count, about four of them.
+    static func wholeTicks(_ values: [Double]) -> [Double] {
+        let top = max(1, Int((values.max() ?? 0).rounded(.up)))
+        let step = max(1, Int((Double(top) / 4).rounded(.up)))
+        return stride(from: 0, through: top, by: step).map(Double.init)
+    }
+
     private func summary(_ days: [(date: Date, metrics: DayMetrics)],
                          series: (unit: String, value: (DayMetrics) -> Double)) -> some View {
-        let week = days.suffix(7).map { series.value($0.metrics) }
+        let lastWeek = days.suffix(7)
+        let week = lastWeek.map { series.value($0.metrics) }
         let total = week.reduce(0, +), active = week.filter { $0 > 0 }.count
+        // Response time is weighted by turns, as Week in numbers counts it; agents are a daily peak, not a sum.
+        let turns = lastWeek.reduce(0) { $0 + $1.metrics.latencyCount }
+        let latency = turns > 0 ? lastWeek.reduce(0) { $0 + $1.metrics.latencyMsTotal } / Double(turns) : 0
         let format = { (value: Double) -> String in
             switch item {
             case .cost, .trend: WidgetReading.usd(value)
             case .talk: WidgetReading.duration(value * 60)
             case .agentTime: WidgetReading.duration(value * 3600)
-            case .agents: "\(Int(value)) at most"
+            case .agents: "\(Int(value))"
             case .latency: "\(Int(value.rounded())) ms"
             default: "\(Int(value.rounded()))"
             }
         }
         return Card(title: "This week") {
             HStack {
-                Text(item == .latency ? "Average of active days" : "Total").font(.system(size: 12))
-                    .foregroundStyle(theme.onSurfaceVariant)
+                Text(item == .latency ? "Average per turn" : item == .agents ? "Most at once" : "Total")
+                    .font(.system(size: 12)).foregroundStyle(theme.onSurfaceVariant)
                 Spacer()
-                Text(item == .latency ? format(active > 0 ? total / Double(active) : 0) : format(total))
+                Text(item == .latency ? format(latency) : item == .agents ? format(week.max() ?? 0) : format(total))
                     .font(.system(size: 12, weight: .semibold)).foregroundStyle(theme.onSurface)
             }
             HStack {

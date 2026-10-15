@@ -28,6 +28,7 @@ import VoiceEngine
             Shot(name: "lock", screen: .lock),
             Shot(name: "home", screen: .home),
             Shot(name: "home-sections", screen: .home, scroll: 330),
+            Shot(name: "home-bottom", screen: .home, scroll: 560),
             Shot(name: "chat", screen: .messages),
             Shot(name: "conversations", screen: .conversations),
             Shot(name: "settings", screen: .settings),
@@ -106,7 +107,17 @@ import VoiceEngine
     cooling.frame = LiveLevels.Frame(look: .mood(.listening), mic: 0.1, voice: 0, thinking: false, time: 3.4, cooldown: 0.6)
     var following = PhoneRender.Shot(name: "assistant-followup", screen: .home)
     following.frame = LiveLevels.Frame(look: .mood(.speaking), mic: 0, voice: 0.5, thinking: false, time: 4.2, followUp: 0.65)
-    for shot in [listening, cooling, following] {
+    let start = Date()
+    for (index, shot) in [listening, cooling, following].enumerated() {
+        // Each shot's own moment of the conversation: listening, the cooldown after speech, the follow-up window.
+        if index == 1 {
+            controller.activation(.speechStarted, at: start.addingTimeInterval(0.4))
+            controller.activation(.speechStopped, at: start.addingTimeInterval(1.2))
+        } else if index == 2 {
+            controller.activation(.tick, at: start.addingTimeInterval(1.8))
+            controller.activation(.assistant(busy: true), at: start.addingTimeInterval(2))
+            controller.activation(.assistant(busy: false), at: start.addingTimeInterval(3))
+        }
         let url = folder.appendingPathComponent("\(shot.name).png")
         if let image = PhoneRender.image(shot, controller: controller), PhoneRender.writePNG(image, to: url) {
             print("wrote \(url.path)")

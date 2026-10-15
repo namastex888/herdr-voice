@@ -67,7 +67,7 @@ struct MorphShell<Orb: View, Phone: View>: View, Animatable {
             }
             if p < 0.6 {
                 orb
-                    .scaleEffect(1 + p * 0.8)
+                    .scaleEffect(1 + p * 0.5)
                     .opacity(1 - p / 0.6)
                     .frame(width: d, height: d)
                     .allowsHitTesting(p < 0.05)
@@ -130,7 +130,7 @@ struct OrbView: View {
                                                center: c, startRadius: 0, endRadius: glowR))
             if f.listening {
                 // Listening: a bright halo in the accent, unmistakable from across the screen.
-                let haloR = diameter * min(0.88, 0.8 + f.mic * 0.16) // the canvas is 1.8 diameters wide
+                let haloR = diameter * min(0.8, 0.72 + f.mic * 0.16) // inside the canvas and the window, even mid-morph
                 context.fill(Path(ellipseIn: CGRect(x: c.x - haloR, y: c.y - haloR, width: haloR * 2, height: haloR * 2)),
                              with: .radialGradient(Gradient(colors: [theme.primary.opacity(0.7), theme.primary.opacity(0)]),
                                                    center: c, startRadius: r * 0.9, endRadius: haloR))
@@ -227,6 +227,7 @@ struct PhoneBody: View {
                 .frame(maxHeight: .infinity, alignment: .bottom)
                 .zIndex(3)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(screen)
         .padding(PhoneWindow.bezel)
         .background(
@@ -305,17 +306,22 @@ struct StatusBar: View {
         .gesture(DragGesture(minimumDistance: 8).onEnded { if $0.translation.height > 12 { onPull() } })
     }
 
+    /// The session's state in a word, as the rest of the phone says it.
     private var linkWord: String {
         let c = chat.controls
         if !c.available || c.link == .disconnected { return "Off" }
         if c.paused { return "Paused" }
         if c.muted { return "Muted" }
-        return c.link == .connected ? "Live" : "Idle"
+        return switch c.link {
+        case .connected: "Live"
+        case .idle: "Idle"
+        case .offline, .disconnected: "Offline"
+        }
     }
 
     private var linkColor: Color {
         let c = chat.controls
-        if !c.available || c.link == .disconnected { return theme.error }
+        if !c.available || c.link == .disconnected || c.link == .offline { return theme.error }
         if c.paused || c.muted { return theme.tertiary }
         return c.link == .connected ? theme.success : theme.onSurfaceVariant
     }
@@ -534,10 +540,10 @@ struct AssistantSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 22)
                 .animation(.easeOut(duration: 0.2), value: chat.lines.count)
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     Chip(symbol: controller.handsFree ? "infinity" : "waveform", text: controller.conversationStatus)
-                        .fixedSize()
-                    Spacer(minLength: 4)
+                        .layoutPriority(1)
+                    Spacer(minLength: 2)
                     RoundIcon(symbol: chat.controls.muted ? "mic.slash.fill" : "mic.fill", tinted: !chat.controls.muted,
                               help: chat.controls.muteTitle) { controller.press(chat.controls.mutePress) }
                         .overlay(FollowUpRing(live: live).allowsHitTesting(false))
@@ -546,7 +552,7 @@ struct AssistantSheet: View {
                         controller.dismissConversation()
                     }
                 }
-                .padding(.horizontal, 18).padding(.bottom, 30)
+                .padding(.horizontal, 14).padding(.bottom, 30)
             }
             .background(UnevenRoundedRectangle(topLeadingRadius: 28, topTrailingRadius: 28, style: .continuous)
                 .fill(theme.surfaceContainerHigh))
@@ -656,7 +662,7 @@ struct Shade: View {
     @Environment(\.phoneTheme) private var theme
 
     private let columns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
-    private let appColumns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 4)
+    private let appColumns = Array(repeating: GridItem(.flexible(), spacing: 4, alignment: .top), count: 4)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

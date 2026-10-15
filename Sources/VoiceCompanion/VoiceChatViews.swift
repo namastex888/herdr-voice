@@ -299,6 +299,8 @@ struct ConversationsScreen: View {
 
 struct ConversationRow: View {
     let transcript: ConversationTranscript
+    /// Its own card; off inside a card that already has one.
+    var carded = true
     let open: () -> Void
     @Environment(\.phoneTheme) private var theme
 
@@ -318,8 +320,9 @@ struct ConversationRow: View {
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(theme.onSurfaceVariant)
             }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(theme.surfaceContainer))
+            .padding(carded ? 10 : 0)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(carded ? theme.surfaceContainer : .clear))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
