@@ -1,11 +1,14 @@
 import Foundation
 
 /// One surface the companion can drive: Herdr, the Mac, a shell. It offers actions as tool definitions and runs
-/// them. Harnesses do the work; skills (see `Skill`) decide which of their actions are in play for a turn.
+/// them. A `harness` entry of the configuration tree runs one (see `HarnessFactory`); learned skills name the
+/// harnesses they need.
 public protocol Harness: Sendable {
     /// Stable id that skills name ("herdr", "mac", "shell").
     var id: String { get }
     var title: String { get }
+    /// What its controls are for, in one sentence: routing matches on it and the voice reads it in its catalog.
+    var summary: String { get }
     /// Whether it can work on this Mac right now (Herdr: the CLI is installed; shell: switched on).
     var isAvailable: Bool { get }
     /// Every action it offers, as tool definitions.
@@ -17,6 +20,32 @@ public protocol Harness: Sendable {
 
 public extension Harness {
     var actionNames: [String] { actions.names }
+    var summary: String { "Controls for \(title): " + actionNames.joined(separator: ", ") + "." }
+}
+
+/// Makes the harness a `harness` entry names, from that entry's config. The companion uses `standard`; tests inject
+/// fakes. Throwing marks the entry failed.
+public struct HarnessFactory: Sendable {
+    public let make: @Sendable (_ name: String, _ config: [String: JSONValue]) throws -> any Harness
+
+    public init(_ make: @escaping @Sendable (_ name: String, _ config: [String: JSONValue]) throws -> any Harness) {
+        self.make = make
+    }
+
+    /// `mac` (`appleScript` in its config turns on run_applescript), `herdr`, `shell` (on unless its entry is
+    /// disabled, which the human owns).
+    public static let standard = HarnessFactory { name, config in
+        switch name {
+        case "mac":
+            guard config["appleScript"].map({ $0.bool != nil || $0.isNull }) ?? true else {
+                throw ComponentError("the Mac harness's appleScript must be true or false")
+            }
+            return MacHarness(allowAppleScript: config["appleScript"]?.bool ?? false)
+        case "herdr": return HerdrHarness()
+        case "shell": return ShellHarness(enabled: true)
+        default: throw ComponentError("there is no harness called \(name)")
+        }
+    }
 }
 
 /// Herdr's panes, agents, workspaces, tabs and worktrees, through the `herdr` CLI.
@@ -25,6 +54,10 @@ public struct HerdrHarness: Harness {
 
     public var id: String { "herdr" }
     public var title: String { "Herdr" }
+    public var summary: String {
+        "Coding agents (Claude Code, Codex) in Herdr: list them, send them work, read and answer them, start new ones; "
+            + "workspaces, tabs, worktrees and panes."
+    }
     public var isAvailable: Bool { HerdrTools.isInstalled() }
     public var actions: ToolList { ToolList(HerdrTools.schemas(includeShell: false)) }
 
@@ -43,6 +76,7 @@ public struct ShellHarness: Harness {
 
     public var id: String { "shell" }
     public var title: String { "Shell" }
+    public var summary: String { "Run a shell command in a folder, after the user's spoken yes for that exact command." }
     public var isAvailable: Bool { enabled }
     public var actions: ToolList { ToolList([HerdrTools.shellSchema]) }
 

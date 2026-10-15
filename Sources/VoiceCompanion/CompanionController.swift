@@ -2,9 +2,9 @@ import AppKit
 import HerdrVoiceCore
 import VoiceEngine
 
-/// Owns the companion: the skill registry (the master harness), routing, the voice session, the chat panel, the orb
-/// and the menu bar item. Every user turn, spoken or typed, is routed to a skill while the voice answers; the
-/// session then offers that skill's tools from the next step on.
+/// Owns the companion: the skill registry (the configuration tree and its components), routing, the voice session,
+/// the chat panel, the orb and the menu bar item. Every user turn, spoken or typed, is routed to a learned skill or a
+/// harness's controls while the voice answers; the session then offers those tools from the next step on.
 @MainActor final class CompanionController: ObservableObject {
     struct ActionInfo: Hashable {
         let name: String
@@ -25,7 +25,7 @@ import VoiceEngine
     let settings: CompanionSettings
     let chat = ChatModel()
     let registry: SkillRegistry
-    let harnesses: [HarnessInfo]
+    @Published private(set) var harnesses: [HarnessInfo] = []
     @Published var tab: CompanionTab = .chat
     @Published private(set) var skills: [Skill] = []
     private var router: any SkillRouter
@@ -35,37 +35,38 @@ import VoiceEngine
     private var statusItem: NSStatusItem?
     private var recentTurns: [String] = []
 
+    /// `store` is where `config.json` lives; the first time it is built from 0.1.0's settings (`legacyDefaults`) and
+    /// skills folder. nil keeps the configuration in memory.
     init(settings: CompanionSettings = CompanionSettings(),
-         store: SkillStore? = SkillStore(directory: SkillStore.defaultDirectory)) {
+         store: CompanionStore? = CompanionStore(directory: CompanionStore.defaultDirectory),
+         legacyDefaults: UserDefaults? = .standard) {
         self.settings = settings
-        let all: [any Harness] = [MacHarness(allowAppleScript: settings.allowAppleScript), HerdrHarness(),
-                                  ShellHarness(enabled: settings.allowShell)]
-        registry = SkillRegistry(harnesses: all, store: store)
+        registry = SkillRegistry(store: store, legacyDefaults: legacyDefaults)
         router = CompanionRouter(jev: settings.jevRouter)
-        harnesses = all.map { harness in
-            HarnessInfo(id: harness.id, title: harness.title, available: harness.isAvailable,
-                        unavailableReason: Self.unavailableReason(harness.id),
-                        actions: harness.actions.definitions.map {
-                            ActionInfo(name: $0["name"] as? String ?? "", description: $0["description"] as? String ?? "")
-                        })
-        }
         chat.provider = settings.provider
-        registry.onActiveChange { [weak self] ids in
-            DispatchQueue.main.async { self?.activeSkillsChanged(ids) }
+        registry.onChange { [weak self] emission in
+            DispatchQueue.main.async { self?.registryChanged(emission) }
         }
-        // The skills in play before anything is routed; the last one activated comes first.
-        for id in ["mac-system", "mac-apps"] + (HerdrTools.isInstalled() ? ["herdr-agents"] : []) {
-            registry.activate(id)
-        }
+        refreshHarnesses()
         skills = registry.skills
         chat.activeSkills = registry.active
     }
 
-    private static func unavailableReason(_ harness: String) -> String {
-        switch harness {
-        case "herdr": "Herdr isn't installed here (no herdr command found), so its skills are off."
-        case "shell": "Off. Turn on shell commands in Settings to use it."
-        default: "Not available."
+    private func refreshHarnesses() {
+        harnesses = registry.harnesses.map { harness in
+            HarnessInfo(id: harness.entryID, title: harness.title, available: harness.status.isActive,
+                        unavailableReason: Self.unavailableReason(harness),
+                        actions: harness.actions.definitions.map {
+                            ActionInfo(name: $0["name"] as? String ?? "", description: $0["description"] as? String ?? "")
+                        })
+        }
+    }
+
+    private static func unavailableReason(_ harness: HarnessState) -> String {
+        switch harness.status {
+        case .disabled: "Off. Turn it on in Settings to use it."
+        case .inactive where harness.name == "herdr": "Herdr isn't installed here (no herdr command found), so it's off."
+        default: harness.status.description
         }
     }
 
@@ -90,9 +91,7 @@ import VoiceEngine
             return
         }
         let session = Realtime(provider: provider, key: key, voice: provider.defaultVoice, host: registry,
-                               instructions: CompanionVoice.instructions(catalog: registry.catalog,
-                                                                         herdr: HerdrTools.isInstalled()),
-                               greeting: CompanionVoice.greeting)
+                               instructions: registry.instructions, greeting: registry.greeting)
         session.setTools(registry.activeTools)
         session.onEvent = { [weak self] in self?.chat.append($0) }
         session.onUserTurn = { [weak self] in self?.route($0) }
@@ -163,9 +162,9 @@ import VoiceEngine
     /// for the steps that follow, and `use_skill` covers anything it misses.
     private func route(_ text: String) {
         recentTurns = Array((recentTurns + [text]).suffix(Self.routingContext))
-        let router = router, skills = registry.skills, recent = Array(recentTurns.dropLast())
+        let router = router, options = registry.routeOptions, recent = Array(recentTurns.dropLast())
         Task { @MainActor [weak self] in
-            guard let decision = await router.route(text, recent: recent, skills: skills), let self else { return }
+            guard let decision = await router.route(text, recent: recent, options: options), let self else { return }
             self.chat.lastRoute = decision
             if decision.skill != RouteDecision.chat { self.registry.activate(decision.skill) }
         }
@@ -175,27 +174,42 @@ import VoiceEngine
         router = CompanionRouter(jev: settings.jevRouter)
     }
 
-    private func activeSkillsChanged(_ ids: [String]) {
-        chat.activeSkills = ids
+    /// One emission per settle: the session gets the new tools and instructions.
+    private func registryChanged(_ emission: RegistryEmission) {
+        chat.activeSkills = emission.active
         skills = registry.skills
-        session?.setTools(registry.activeTools)
+        refreshHarnesses()
+        session?.setTools(emission.tools)
+        session?.setInstructions(emission.instructions)
     }
 
     func title(ofSkill id: String) -> String {
-        skills.first { $0.id == id }?.title ?? id
+        skills.first { $0.entryID == id }?.title ?? harnesses.first { $0.id == id }?.title ?? id
     }
 
     func deleteLearned(_ id: String) {
         do {
-            try registry.removeLearned(id)
+            try registry.forgetSkill(id)
         } catch {
-            chat.note("Couldn't delete that skill: \(error.localizedDescription)")
+            chat.note("Couldn't delete that skill: \(error)")
         }
-        activeSkillsChanged(registry.active)
+    }
+
+    /// The human's own switches. Harness entries are theirs and live in the tree, so these read and write it directly
+    /// (the old UserDefaults keys are only read once, by the migration).
+    var appleScriptOn: Bool { registry.tree["harness.mac"]?.config["appleScript"]?.bool ?? false }
+    var shellOn: Bool { !(registry.tree["harness.shell"]?.disabled ?? true) }
+
+    func setAppleScript(_ on: Bool) {
+        do { try registry.setField("harness.mac", "appleScript", .bool(on)) } catch { chat.note("Couldn't change that: \(error)") }
+    }
+
+    func setShell(_ on: Bool) {
+        do { try registry.setDisabled("harness.shell", !on) } catch { chat.note("Couldn't change that: \(error)") }
     }
 
     func openSkillsFolder() {
-        let folder = SkillStore.defaultDirectory
+        let folder = CompanionStore.defaultDirectory
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         NSWorkspace.shared.open(folder)
     }

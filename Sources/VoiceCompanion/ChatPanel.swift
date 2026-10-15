@@ -189,12 +189,12 @@ private struct SkillsView: View {
     var body: some View {
         List {
             Section("Learned skills") {
-                if controller.skills.allSatisfy({ !$0.learned }) {
+                if controller.skills.isEmpty {
                     Text("None yet. Teach one by voice or in the chat: “learn a skill called start my day that opens Mail "
                          + "and Calendar and sets the volume to 30”.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
-                ForEach(controller.skills.filter(\.learned)) { skill in
+                ForEach(controller.skills) { skill in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text(skill.title).font(.headline)
@@ -216,21 +216,13 @@ private struct SkillsView: View {
                     if !harness.available {
                         Text(harness.unavailableReason).font(.callout).foregroundStyle(.secondary)
                     }
-                    ForEach(controller.skills.filter { $0.harness == harness.id }) { skill in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(skill.title).font(.headline)
-                                if chat.activeSkills.contains(skill.id) {
-                                    Text("loaded").font(.caption2).foregroundStyle(.green)
-                                }
-                            }
-                            Text(skill.summary).font(.callout).foregroundStyle(.secondary)
-                            FlowText(items: skill.actions.map { name in
-                                (name, harness.actions.first { $0.name == name }?.description ?? "")
-                            })
+                    VStack(alignment: .leading, spacing: 4) {
+                        if chat.activeSkills.contains(harness.id) {
+                            Text("loaded").font(.caption2).foregroundStyle(.green)
                         }
-                        .padding(.vertical, 2)
+                        FlowText(items: harness.actions.map { ($0.name, $0.description) })
                     }
+                    .padding(.vertical, 2)
                 } header: {
                     Text("\(harness.title) · \(harness.actions.count) actions")
                 }
@@ -301,9 +293,11 @@ private struct SettingsView: View {
                 Text(settings.jevRouter == nil ? "Routing by words until Jev has a key." : "Routing with \(settings.jevModel).")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Powerful skills (apply after restart)") {
-                Toggle("AppleScript (each script needs your spoken yes)", isOn: $settings.allowAppleScript)
-                Toggle("Shell commands (each command needs your spoken yes)", isOn: $settings.allowShell)
+            Section("Powerful controls") {
+                Toggle("AppleScript (each script needs your spoken yes)",
+                       isOn: Binding(get: { controller.appleScriptOn }, set: { controller.setAppleScript($0) }))
+                Toggle("Shell commands (each command needs your spoken yes)",
+                       isOn: Binding(get: { controller.shellOn }, set: { controller.setShell($0) }))
                 HStack {
                     Button("Restart now") { controller.restart() }
                     Button("Open skills folder") { controller.openSkillsFolder() }

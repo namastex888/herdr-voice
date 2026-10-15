@@ -41,6 +41,11 @@ public struct MacHarness: Harness {
 
     public var id: String { "mac" }
     public var title: String { "Mac" }
+    public var summary: String {
+        "The Mac: open, list and quit apps; open websites, files and folders; volume, dark mode, the clipboard, "
+            + "notifications, battery and display sleep; the user's Shortcuts"
+            + (allowAppleScript ? "; AppleScript after a spoken yes." : ".")
+    }
     public var isAvailable: Bool { true }
     public var actions: ToolList { ToolList(Self.schemas + (allowAppleScript ? [Self.appleScriptSchema] : [])) }
 
